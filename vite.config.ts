@@ -6,6 +6,7 @@ const inject = process.env.ANNOTATION_INJECT === "1";
 export default defineConfig({
     plugins: [tailwindcss()],
     define: { "process.env.NODE_ENV": JSON.stringify("production") },
+    test: { include: ["tests/unit/**/*.test.ts"], environment: "node" },
     build: {
         emptyOutDir: !inject,
         lib: {
