@@ -2,7 +2,7 @@
  * Self-contained annotation Shadow DOM stylesheet.
  * Mirrors laravel-toolbar resources/css/toolbar.css isolation:
  * Tailwind is compiled into this sheet and adopted on the annotation host shadow root.
- * Do not rely on Orbit document styles.css piercing the shadow.
+ * Do not rely on host page styles piercing the shadow.
  */
 
 @import "tailwindcss" source(none);
@@ -42,7 +42,7 @@
  * The shell publishes --shell-safe-* once. This control is fixed to the viewport,
  * outside that pad, so it uses the same values. Unset, both are 0.
  */
-#laravel-toolbar-annotation-root [data-orbit-annotation-fab] {
+#laravel-toolbar-annotation-root [data-annotation-fab] {
     right: calc(var(--spacing, 0.25rem) * 5 + var(--shell-safe-right, 0px));
     bottom: calc(var(--spacing, 0.25rem) * 5 + var(--shell-safe-bottom, 0px));
 }

@@ -21,13 +21,13 @@ try {
         } else {
             await route.fulfill({
                 contentType: "text/html",
-                body: '<h1>Host toolbar</h1><script type="module">import * as api from "/index.js"; window.api=api; window.handle=api.mountAnnotation({floatingControl:false,dictation:{provider:"none"},thread:{id:"host-thread"}});</script>',
+                body: '<h1>Host toolbar</h1><script type="module">import * as api from "/index.js"; window.api=api; window.handle=api.mountAnnotation({floatingControl:false,dictation:{provider:"none"}});</script>',
             });
         }
     });
     await page.goto("https://host.test");
     await page.waitForFunction(() => window.api);
-    assert.equal(await page.locator("[data-orbit-annotation-fab]").count(), 0);
+    assert.equal(await page.locator("[data-annotation-fab]").count(), 0);
     const result = await page.evaluate(() => {
         const api = window.api;
         const first = api.getAnnotationState();
@@ -39,12 +39,11 @@ try {
         stop();
         const before = notifications;
         api.setAnnotationMode(false);
-        api.saveAnnotationSettings({ mode: "server", serviceUrl: "/annotations", threadId: "" });
+        api.saveAnnotationSettings({ mode: "server", serviceUrl: "/annotations" });
         window.handle.destroy();
         window.handle = api.mountAnnotation({
             floatingControl: false,
             dictation: { provider: "none" },
-            thread: { id: "host-thread" },
         });
         return {
             stable,
@@ -59,7 +58,7 @@ try {
         active: true,
         notified: true,
         unsubscribed: true,
-        settings: { mode: "server", serviceUrl: "/annotations", threadId: "" },
+        settings: { mode: "server", serviceUrl: "/annotations" },
     });
     // Removing the page's annotations keeps the annotations of other pages.
     stored = [
@@ -86,7 +85,7 @@ try {
     assert.equal(await page.locator("#laravel-toolbar-annotation-host").count(), 0);
     assert.deepEqual(errors, []);
     console.log(
-        "Host controls: hidden pill, stable snapshots, subscriptions, saved settings, cleared thread, page count, remove page, remount and teardown passed.",
+        "Host controls: hidden pill, stable snapshots, subscriptions, saved settings, page count, remove page, remount and teardown passed.",
     );
 } finally {
     await browser.close();

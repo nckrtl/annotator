@@ -1,4 +1,3 @@
-import { checkOrbit, orbitAvailability } from "../orbit";
 import { ChevronDownIcon } from "@heroicons/react/16/solid";
 import { useStore } from "../core/store";
 import {
@@ -12,7 +11,12 @@ import {
     removalError,
 } from "../sync";
 import { useEffect, useRef, useState } from "react";
-import { selectThread, threadSelection } from "../thread";
+import {
+    checkTransport,
+    listTransports,
+    transportAvailability,
+    type TransportField,
+} from "../transport";
 import {
     ChatBubbleBottomCenterTextIcon,
     TrashIcon,
@@ -26,10 +30,12 @@ import { cn } from "../lib/utils";
 export function AnnotationFloatingControl() {
     const connection = useStore(serviceConnection);
     const deleteError = useStore(removalError);
-    const orbit = useStore(orbitAvailability);
+    const availability = useStore(transportAvailability);
+    const transports = listTransports();
     const [settingsOpen, setSettingsOpen] = useState(false);
     useEffect(() => {
-        if (settingsOpen) void checkOrbit();
+        if (settingsOpen)
+            for (const transport of listTransports()) void checkTransport(transport.id);
     }, [settingsOpen]);
     const [service, setService] = useState(serviceSettings);
     const [error, setError] = useState("");
@@ -72,8 +78,8 @@ export function AnnotationFloatingControl() {
                     : "checking"
               : "idle";
 
-    const thread = useRefValue(threadSelection);
-    const [threadInput, setThreadInput] = useState<string | null>(null);
+    const [fieldInputs, setFieldInputs] = useState<Record<string, string>>({});
+    const selected = transports.find((transport) => transport.id === service.mode);
     const isActive = useRefValue(annotationMode);
     const visibleCount = useRefValue(annotations).length;
     const sessionCount = useStore(localSessionCount);
@@ -83,7 +89,7 @@ export function AnnotationFloatingControl() {
     return (
         <div
             data-feedback-toolbar=""
-            data-orbit-annotation-fab=""
+            data-annotation-fab=""
             className={cn(
                 "pointer-events-auto fixed right-5 bottom-5 z-[2147483646] flex origin-bottom-right scale-[0.825] items-center rounded-full border border-white/10 p-1 shadow-lg backdrop-blur-xl transition-colors",
                 isActive ? "bg-white text-black" : "bg-[#111111]/92 text-white",
@@ -109,7 +115,10 @@ export function AnnotationFloatingControl() {
                             setError(cause instanceof Error ? cause.message : "Invalid settings");
                             return;
                         }
-                        if (threadInput !== null) selectThread(threadInput);
+                        for (const transport of transports)
+                            for (const field of transport.fields ?? [])
+                                if (fieldInputs[field.id] !== undefined)
+                                    field.save(fieldInputs[field.id].trim());
                         setSettingsOpen(false);
                     }}
                 >
@@ -128,9 +137,15 @@ export function AnnotationFloatingControl() {
                                 className="w-full appearance-none rounded border border-white/25 bg-[#171717] py-2 pr-9 pl-2 text-white"
                             >
                                 <option value="server">Local server</option>
-                                <option value="orbit" disabled={orbit.state !== "available"}>
-                                    Orbit
-                                </option>
+                                {transports.map((transport) => (
+                                    <option
+                                        key={transport.id}
+                                        value={transport.id}
+                                        disabled={availability[transport.id]?.state !== "available"}
+                                    >
+                                        {transport.label}
+                                    </option>
+                                ))}
                             </select>
                             <ChevronDownIcon
                                 aria-hidden="true"
@@ -138,26 +153,28 @@ export function AnnotationFloatingControl() {
                             />
                         </div>
                     </label>
-                    {orbit.state !== "available" && (
-                        <p role="status" className="mb-3 text-xs text-white/60">
-                            {orbit.reason}
-                        </p>
+                    {transports.map((transport) =>
+                        availability[transport.id]?.state !== "available" &&
+                        availability[transport.id]?.reason ? (
+                            <p
+                                key={transport.id}
+                                role="status"
+                                className="mb-3 text-xs text-white/60"
+                            >
+                                {availability[transport.id].reason}
+                            </p>
+                        ) : null,
                     )}
-                    <div hidden={service.mode !== "orbit"}>
-                        <label htmlFor="annotate-thread-id" className="mb-2 block">
-                            T3 thread ID
-                        </label>
-                        <input
-                            id="annotate-thread-id"
-                            value={threadInput ?? thread.id}
-                            onChange={(event) => setThreadInput(event.target.value)}
-                            placeholder="Enter thread ID"
-                            className="w-full rounded border border-white/25 bg-black/30 p-2 text-white"
+                    {selected?.fields?.map((field) => (
+                        <TransportFieldInput
+                            key={field.id}
+                            field={field}
+                            input={fieldInputs[field.id]}
+                            onInput={(value) =>
+                                setFieldInputs({ ...fieldInputs, [field.id]: value })
+                            }
                         />
-                        <p className="mt-2 break-words text-xs text-white/60">
-                            {thread.manual ? "Saved for this tab" : thread.status}
-                        </p>
-                    </div>
+                    ))}
                     <div hidden={service.mode !== "server"}>
                         <label className="mt-3 block">
                             Annotation server URL
@@ -229,7 +246,7 @@ export function AnnotationFloatingControl() {
                 className="inline-flex size-9 items-center justify-center rounded-full bg-transparent text-inherit hover:bg-black/10"
                 onClick={() => {
                     resetServerCheck();
-                    setThreadInput(null);
+                    setFieldInputs({});
                     setService(serviceSettings());
                     setError("");
                     setSettingsOpen(!settingsOpen);
@@ -260,7 +277,7 @@ export function AnnotationFloatingControl() {
             </button>
             <button
                 type="button"
-                data-orbit-annotation-chrome=""
+                data-annotation-chrome=""
                 data-active={isActive ? "" : undefined}
                 aria-pressed={isActive}
                 aria-label={isActive ? "Exit annotation mode" : "Enter annotation mode"}
@@ -293,6 +310,35 @@ export function AnnotationFloatingControl() {
                     </span>
                 ) : null}
             </button>
+        </div>
+    );
+}
+
+function TransportFieldInput({
+    field,
+    input,
+    onInput,
+}: {
+    field: TransportField;
+    input: string | undefined;
+    onInput: (value: string) => void;
+}) {
+    const [, rerender] = useState(0);
+    useEffect(() => field.subscribe?.(() => rerender((tick) => tick + 1)), [field]);
+    const status = field.status?.();
+    return (
+        <div className="mb-3">
+            <label htmlFor={field.id} className="mb-2 block">
+                {field.label}
+            </label>
+            <input
+                id={field.id}
+                value={input ?? field.value()}
+                onChange={(event) => onInput(event.target.value)}
+                placeholder={field.placeholder}
+                className="w-full rounded border border-white/25 bg-black/30 p-2 text-white"
+            />
+            {status ? <p className="mt-2 break-words text-xs text-white/60">{status}</p> : null}
         </div>
     );
 }

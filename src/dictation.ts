@@ -12,7 +12,7 @@ import { attachWaveformMeter } from "./waveform";
  * Opus is preferred when MediaRecorder can emit `codecs=opus` (Chrome/Firefox
  * typically `audio/webm;codecs=opus`). Safari and other browsers that cannot
  * produce Opus fall back to PCM16 16 kHz mono, which is Diction's documented
- * default and the path already proven against diction.orbit.
+ * default.
  *
  * The `diction.opus.v1` subprotocol is offered with Opus. If Diction declines
  * it, this client MUST send PCM — the server treats that connection as PCM.
@@ -39,6 +39,8 @@ export type DictateOptions = {
     abortSignal?: AbortSignal;
     /** Live microphone levels for the recording waveform. */
     onLevels?: (levels: number[]) => void;
+    /** Audio flows to the connected speech service. */
+    onRecording?: () => void;
 };
 
 const OPUS_SUBPROTOCOL = "diction.opus.v1";
@@ -111,6 +113,7 @@ export async function dictate(options: DictateOptions): Promise<string> {
             }
 
             await capture.attach(socket);
+            options.onRecording?.();
             await waitForStop(socket, stop, abort);
             await capture.stop();
 

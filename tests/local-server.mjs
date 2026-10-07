@@ -48,13 +48,13 @@ try {
     const second = await start(["--store", join(dir, "second")]);
     const restricted = await start([
         "--allow-origin",
-        "https://instance.orbit",
+        "https://app.example",
         "--allow-origin",
-        "t3code://app",
+        "desktop://app",
         "--allow-origin",
-        "t3code-dev://app",
+        "desktop-dev://app",
     ]);
-    for (const origin of ["https://instance.orbit", "t3code://app", "t3code-dev://app"]) {
+    for (const origin of ["https://app.example", "desktop://app", "desktop-dev://app"]) {
         for (const method of ["GET", "OPTIONS", "DELETE"]) {
             const response = await fetch(restricted.url, {
                 method,
@@ -155,7 +155,7 @@ try {
     assert.equal((await fetch(new URL("/unknown", first.url))).status, 404);
     const preflight = await fetch(first.url, {
         method: "OPTIONS",
-        headers: { Origin: "https://preview.orbit", "Access-Control-Request-Method": "POST" },
+        headers: { Origin: "https://preview.example", "Access-Control-Request-Method": "POST" },
     });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get("access-control-allow-origin"), "*");

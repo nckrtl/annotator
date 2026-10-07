@@ -1,11 +1,11 @@
 import { createStore } from "./core/store";
-import { threadSelection } from "./thread";
 import {
-    connectAnnotationRealtime,
-    type AnnotationRealtime,
-    type AnnotationRealtimeConnection,
-} from "./realtime";
-import { checkOrbit } from "./orbit";
+    checkTransport,
+    findTransport,
+    listTransports,
+    type AnnotationTransport,
+    type TransportSubscription,
+} from "./transport";
 import {
     dismissAnnotations,
     isDismissed,
@@ -31,17 +31,24 @@ export type AnnotationEventHandlers = {
 export const serviceConnection = createStore<
     "Connecting" | "Connected" | "Unavailable" | "Host integration"
 >("Host integration");
+/** Local server URL in server mode; empty when a transport delivers. */
 let serviceUrl = "";
+let transport: AnnotationTransport | undefined;
 let generation = 0;
-let discoverServer = false;
+let discoverUrl = "";
 let eventsUrl = "";
-let realtime: AnnotationRealtime = {};
-let defaults: { serviceUrl: string; realtime: AnnotationRealtime } = {
-    serviceUrl: "",
-    realtime: {},
+export type ServiceOptions = {
+    /** Local annotation server endpoint. */
+    serverUrl?: string;
+    /** Delivery mode used when the tab has no saved choice: "server" or a transport id. */
+    delivery?: string;
+    /** Same-origin endpoint to probe when nothing is configured. */
+    discoverUrl?: string;
 };
+let defaults: ServiceOptions = {};
 const configurationListeners = new Set<() => void>();
-export type DeliveryMode = "server" | "orbit";
+/** "server" is the built-in local server; any other value is a transport id. */
+export type DeliveryMode = "server" | (string & {});
 export const deliveryMode = createStore<DeliveryMode>("server");
 export const localSessionCount = createStore(0);
 export const removalError = createStore("");
@@ -82,23 +89,27 @@ export function saveServiceSettings(url: string, mode: DeliveryMode): void {
         if (!url.trim()) throw new Error("Enter the annotation server URL.");
         if (!["http:", "https:"].includes(new URL(url, window.location.href).protocol))
             throw new Error("Use an HTTP or HTTPS URL.");
-    }
+    } else if (!findTransport(mode)) throw new Error(`Unknown delivery mode: ${mode}`);
     const override = { mode, serviceUrl: url.trim() };
     try {
         sessionStorage.setItem("annotate:service", JSON.stringify(override));
     } catch {
         /* Optional storage. */
     }
-    configureAnnotationService(defaults.serviceUrl, defaults.realtime, override);
+    configureAnnotationService(defaults, override);
 }
 const revisions = new Map<string, number>();
+function defaultMode(options: ServiceOptions): DeliveryMode {
+    if (options.delivery === "server" || (options.delivery && findTransport(options.delivery)))
+        return options.delivery;
+    return options.serverUrl ? "server" : (listTransports()[0]?.id ?? "server");
+}
 export function configureAnnotationService(
-    url?: string,
-    options: AnnotationRealtime = {},
+    options: ServiceOptions = {},
     override?: ServiceSettings,
-    serverUrl?: string,
 ): void {
-    defaults = { serviceUrl: url ?? "", realtime: options };
+    defaults = options;
+    const fallback = defaultMode(options);
     if (!override) {
         try {
             const saved = JSON.parse(sessionStorage.getItem("annotate:service") ?? "null");
@@ -106,47 +117,37 @@ export function configureAnnotationService(
                 override = {
                     serviceUrl: saved.serviceUrl,
                     mode:
-                        saved.mode === "t3"
-                            ? "orbit"
-                            : ["server", "orbit"].includes(saved.mode)
-                              ? saved.mode
-                              : saved.mode === "browser" ||
-                                  (saved.serviceUrl && saved.serviceUrl !== (url ?? ""))
-                                ? "server"
-                                : url
-                                  ? "orbit"
-                                  : "server",
+                        saved.mode === "server" || findTransport(saved.mode)
+                            ? saved.mode
+                            : saved.mode === "browser" || saved.serviceUrl
+                              ? "server"
+                              : fallback,
                 };
             }
         } catch {
             /* Optional storage. */
         }
     }
-    discoverServer = !override && !url && !serverUrl;
-    settings = override ?? {
-        mode: serverUrl ? "server" : url ? "orbit" : "server",
-        serviceUrl: serverUrl ?? "",
-    };
+    settings = override ?? { mode: fallback, serviceUrl: options.serverUrl ?? "" };
+    discoverUrl =
+        !override && settings.mode === "server" && !options.serverUrl
+            ? (options.discoverUrl ?? "")
+            : "";
     deliveryMode.setState(settings.mode);
     removalError.setState("");
+    transport = settings.mode === "server" ? undefined : findTransport(settings.mode);
     serviceUrl =
-        (settings.mode === "server"
-            ? settings.serviceUrl
-            : settings.mode === "orbit"
-              ? url
-              : ""
-        )?.replace(/\/$/, "") || "";
-    if (settings.mode === "server" && serviceUrl)
-        serviceUrl = resolveAnnotationServerUrl(serviceUrl);
+        settings.mode === "server" && settings.serviceUrl
+            ? resolveAnnotationServerUrl(settings.serviceUrl)
+            : "";
     localSessionCount.setState(0);
     try {
         rememberNumber(Number(sessionStorage.getItem(`annotate:counter:${serviceUrl}`)));
     } catch {
         /* Optional storage. */
     }
-    realtime = settings.mode === "orbit" ? options : {};
     eventsUrl = "";
-    serviceConnection.setState(serviceUrl ? "Connecting" : "Host integration");
+    serviceConnection.setState(serviceUrl || transport ? "Connecting" : "Host integration");
     generation++;
     revisions.clear();
     configurationListeners.forEach((restart) => restart());
@@ -233,106 +234,72 @@ async function request(path: string, annotation?: Annotation): Promise<unknown> 
         );
     return result;
 }
+async function ensureAvailable(target: AnnotationTransport): Promise<void> {
+    if (!target.check) return;
+    const availability = await checkTransport(target.id);
+    if (availability.state !== "available") throw new Error(availability.reason);
+}
 export async function pushAnnotation(annotation: Annotation): Promise<Annotation | null> {
     const pathname = annotation.pathname ?? window.location.pathname;
     const working: Annotation = {
         ...annotation,
-        threadId: settings.mode === "orbit" ? threadSelection.value.id : undefined,
         url: annotation.url ?? window.location.href,
         pathname,
         status: annotation.status ?? "pending",
     };
     const existing = loadAnnotations(pathname).filter((a) => a.id !== annotation.id);
     saveAnnotations([...existing, working], pathname);
-    if (settings.mode === "server" && !serviceUrl) {
+    if (!serviceUrl && !transport) {
         const failed = {
             ...working,
             delivery: "error" as const,
-            syncError: "Enter the annotation server URL in settings.",
+            syncError:
+                settings.mode === "server"
+                    ? "Enter the annotation server URL in settings."
+                    : "No annotation delivery configured.",
         };
         saveAnnotations([...existing, failed], pathname);
         return failed;
     }
-    if (settings.mode === "orbit" && !working.threadId) {
-        const failed = {
-            ...working,
-            delivery: "error" as const,
-            syncError: "Enter a T3 thread ID or choose another mode.",
-        };
-        saveAnnotations([...existing, failed], pathname);
-        return failed;
-    }
-    if (serviceUrl) {
-        const current = generation;
-        const endpoint = serviceUrl;
-        const local = settings.mode === "server";
-        try {
-            if (settings.mode === "orbit") {
-                const availability = await checkOrbit();
-                if (current !== generation) return working;
-                if (availability.state !== "available") throw new Error(availability.reason);
-            }
-            const result = (await (local
-                ? mutateLocal(endpoint, () => request(endpoint, working))
-                : request(endpoint, working))) as {
+    const current = generation;
+    try {
+        let result: unknown;
+        if (transport) {
+            const target = transport;
+            await ensureAvailable(target);
+            if (current !== generation) return working;
+            result = await target.submit(working);
+        } else {
+            const endpoint = serviceUrl;
+            const response = (await mutateLocal(endpoint, () => request(endpoint, working))) as {
                 annotation?: unknown;
                 data?: unknown;
             };
-            return receive(result.annotation ?? result.data);
-        } catch (error) {
-            const failed = {
-                ...working,
-                syncError: error instanceof Error ? error.message : "Could not submit annotation",
-                delivery: "error" as const,
-            };
-            if (!isDismissed(failed.id))
-                saveAnnotations(
-                    [...loadAnnotations(pathname).filter((a) => a.id !== failed.id), failed],
-                    pathname,
-                );
-            return failed;
+            result = response.annotation ?? response.data;
         }
+        return receive(result);
+    } catch (error) {
+        const failed = {
+            ...working,
+            syncError: error instanceof Error ? error.message : "Could not submit annotation",
+            delivery: "error" as const,
+        };
+        if (!isDismissed(failed.id))
+            saveAnnotations(
+                [...loadAnnotations(pathname).filter((a) => a.id !== failed.id), failed],
+                pathname,
+            );
+        return failed;
     }
-    const failed = {
-        ...working,
-        delivery: "error" as const,
-        syncError: "No Orbit annotation service configured.",
-    };
-    saveAnnotations([...existing, failed], pathname);
-    return failed;
 }
 export async function retryAnnotation(annotation: Annotation): Promise<Annotation | null> {
-    if (
-        settings.mode !== "orbit" ||
-        !serviceUrl ||
-        !annotation.revision ||
-        !threadSelection.value.id
-    )
-        return pushAnnotation(annotation);
+    const target = transport;
+    if (!target?.retry || !annotation.revision) return pushAnnotation(annotation);
     const current = generation;
     try {
-        const availability = await checkOrbit();
+        await ensureAvailable(target);
         if (current !== generation) return annotation;
-        if (availability.state !== "available") throw new Error(availability.reason);
-        const response = await fetch(`${serviceUrl}/${encodeURIComponent(annotation.id)}/retry`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                threadId: annotation.threadId || threadSelection.value.id || undefined,
-            }),
-            signal: AbortSignal.timeout(10000),
-        });
-        const result = (await response.json()) as {
-            annotation?: unknown;
-            data?: unknown;
-            error?: string | { message?: string };
-        };
-        if (!response.ok)
-            throw new Error(
-                (typeof result.error === "string" ? result.error : result.error?.message) ||
-                    "Retry failed",
-            );
-        return receive(result.annotation ?? result.data);
+        return receive(await target.retry(annotation));
     } catch (error) {
         return {
             ...annotation,
@@ -350,11 +317,11 @@ function summary(annotations: Annotation[]): AnnotationSync {
     };
 }
 export async function fetchAnnotationSync(): Promise<AnnotationSync> {
-    if (discoverServer) {
+    if (discoverUrl) {
         const started = generation;
-        discoverServer = false;
+        const candidate = discoverUrl;
+        discoverUrl = "";
         try {
-            const candidate = "/__orbit/annotator/annotations";
             const response = await fetch(candidate, { signal: AbortSignal.timeout(5000) });
             const body = await response.json();
             if (
@@ -363,17 +330,24 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
                 body.meta?.service === "@nckrtl/annotator" &&
                 Array.isArray(body.data)
             ) {
-                configureAnnotationService(defaults.serviceUrl, defaults.realtime, {
-                    mode: "server",
-                    serviceUrl: candidate,
-                });
+                configureAnnotationService(defaults, { mode: "server", serviceUrl: candidate });
             }
         } catch {
             /* No same-origin server: keep manual local setup. */
         }
     }
     const current = generation;
-    if (serviceUrl) {
+    if (transport) {
+        try {
+            const records = await transport.list();
+            if (current !== generation) return summary([]);
+            if (!Array.isArray(records)) throw new Error("Invalid annotation list");
+            serviceConnection.setState("Connected");
+            return summary(records.flatMap((value) => receive(value) ?? []));
+        } catch {
+            if (current === generation) serviceConnection.setState("Unavailable");
+        }
+    } else if (serviceUrl) {
         try {
             const result = (await request(serviceUrl)) as {
                 annotations?: unknown[];
@@ -388,19 +362,15 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
                 const candidate = new URL(result.meta.eventsUrl, endpoint);
                 if (candidate.origin === endpoint.origin) eventsUrl = candidate.href;
             }
-            const deletedIds =
-                settings.mode === "server" && Array.isArray(result.meta?.deletedIds)
-                    ? result.meta.deletedIds.filter((id): id is string => typeof id === "string")
-                    : [];
+            const deletedIds = Array.isArray(result.meta?.deletedIds)
+                ? result.meta.deletedIds.filter((id): id is string => typeof id === "string")
+                : [];
             dismissAnnotations(deletedIds);
             const records = result.annotations ?? result.data;
             if (!Array.isArray(records)) throw new Error("Invalid annotation list");
-            const missingIds =
-                settings.mode === "server"
-                    ? reconcileServerAnnotations(
-                          records.flatMap((value) => parseAnnotation(value) ?? []),
-                      )
-                    : [];
+            const missingIds = reconcileServerAnnotations(
+                records.flatMap((value) => parseAnnotation(value) ?? []),
+            );
             const snapshot = summary(records.flatMap((value) => receive(value) ?? []));
             snapshot.resolvedIds.push(...deletedIds, ...missingIds);
             return snapshot;
@@ -415,7 +385,8 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
     let stop = () => {};
     const start = () => {
         stop();
-        if (!serviceUrl) return;
+        if (!serviceUrl && !transport) return;
+        const target = transport;
         let closed = false;
         let fetching = false;
         let again = false;
@@ -442,12 +413,15 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
                 void refresh();
             }
         };
-        let connection: AnnotationRealtimeConnection | undefined;
-        if (settings.mode === "orbit") {
-            void checkOrbit().then((availability) => {
-                if (closed || availability.state !== "available") return;
-                connection = connectAnnotationRealtime(realtime, () => void refresh());
-            });
+        let connection: TransportSubscription | undefined;
+        if (target?.subscribe) {
+            const subscribe = target.subscribe;
+            void (target.check ? checkTransport(target.id) : Promise.resolve(null)).then(
+                (availability) => {
+                    if (closed || (availability && availability.state !== "available")) return;
+                    connection = subscribe(() => void refresh());
+                },
+            );
         }
         // Poll only when no event would tell us about a change, and never from a hidden tab.
         const hidden = () => document.visibilityState === "hidden";

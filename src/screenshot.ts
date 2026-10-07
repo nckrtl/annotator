@@ -1,11 +1,19 @@
-import { toJpeg } from "html-to-image";
+import { getFontEmbedCSS, toJpeg } from "html-to-image";
+import { hostCapture } from "./hooks";
 import type { AnnotationDraft, AnnotationRect } from "./types";
 import { screenshotCrop } from "./viewport";
 
 const HIGHLIGHT = "#F53003";
 
+type Scroll = { x: number; y: number };
+
+/** Fonts rarely change on a page; embedding them is the slowest part of a DOM render. */
+let fontCss: { key: number; css: Promise<string> } | undefined;
+
 export async function captureAnnotationScreenshot(
     draft: AnnotationDraft,
+    /** Page scroll when the box was measured; the page may have scrolled since. */
+    scroll: Scroll = { x: window.scrollX, y: window.scrollY },
 ): Promise<string | undefined> {
     if (typeof document === "undefined" || !draft.boundingBox) {
         return undefined;
@@ -15,27 +23,115 @@ export async function captureAnnotationScreenshot(
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
     });
+    // Where the crop sits in the viewport now.
+    const live: AnnotationRect = {
+        ...crop,
+        x: crop.x + scroll.x - window.scrollX,
+        y: crop.y + scroll.y - window.scrollY,
+    };
+
+    const image = (await captureWithHost(live)) ?? (await renderDom(crop, live, scroll));
+
+    if (!image) {
+        return undefined;
+    }
 
     try {
-        const image = await toJpeg(document.documentElement, {
+        return await paintHighlight(image, crop, draft.boundingBox);
+    } catch {
+        return undefined;
+    }
+}
+
+async function captureWithHost(rect: AnnotationRect): Promise<string | undefined> {
+    const capture = hostCapture();
+
+    if (!capture) {
+        return undefined;
+    }
+
+    try {
+        const image = await capture(rect);
+        return typeof image === "string" ? image : await blobToDataUrl(image);
+    } catch {
+        return undefined;
+    }
+}
+
+async function renderDom(
+    crop: AnnotationRect,
+    live: AnnotationRect,
+    scroll: Scroll,
+): Promise<string | undefined> {
+    const filter = (node: HTMLElement) =>
+        !(node instanceof Element) || (!shouldHideFromCapture(node) && mayAppearIn(node, live));
+
+    try {
+        return await toJpeg(document.documentElement, {
             quality: 0.72,
             pixelRatio: 1,
             width: crop.width,
             height: crop.height,
             canvasWidth: crop.width,
             canvasHeight: crop.height,
-            cacheBust: true,
-            filter: (node) => !(node instanceof Element) || !shouldHideFromCapture(node),
+            // Let the browser cache serve images and fonts; a fresh fetch per capture is slow.
+            cacheBust: false,
+            fontEmbedCSS: await embeddedFonts(),
+            filter,
             style: {
-                transform: `translate(${-(window.scrollX + crop.x)}px, ${-(window.scrollY + crop.y)}px)`,
+                transform: `translate(${-(scroll.x + crop.x)}px, ${-(scroll.y + crop.y)}px)`,
                 transformOrigin: "top left",
             },
         });
-
-        return await paintHighlight(image, crop, draft.boundingBox);
     } catch {
         return undefined;
     }
+}
+
+function embeddedFonts(): Promise<string> {
+    const key = document.styleSheets.length;
+
+    if (!fontCss || fontCss.key !== key) {
+        const css = getFontEmbedCSS(document.documentElement, { cacheBust: false });
+        fontCss = { key, css };
+        css.catch(() => {
+            if (fontCss?.css === css) fontCss = undefined;
+        });
+    }
+
+    return fontCss.css;
+}
+
+/**
+ * Skip subtrees that cannot reach the crop, so the render clones and inlines styles for
+ * a small part of a large page. A skipped node leaves the cloned layout, so only skip
+ * nodes whose absence cannot move what is inside the crop: nodes below it, and nodes
+ * out of the normal flow. Nodes above or beside the crop stay, since their size places it.
+ */
+function mayAppearIn(node: Element, crop: AnnotationRect): boolean {
+    const box = node.getBoundingClientRect();
+
+    if (box.width === 0 && box.height === 0) {
+        // Empty boxes can still hold overflowing or positioned children.
+        return true;
+    }
+
+    const intersects =
+        box.right > crop.x &&
+        box.left < crop.x + crop.width &&
+        box.bottom > crop.y &&
+        box.top < crop.y + crop.height;
+
+    if (intersects) {
+        return true;
+    }
+
+    if (box.top >= crop.y + crop.height) {
+        return false;
+    }
+
+    const position = getComputedStyle(node).position;
+    return position !== "absolute" && position !== "fixed";
 }
 
 export async function paintHighlight(
@@ -81,6 +177,15 @@ function shouldHideFromCapture(node: Element): boolean {
         node.closest("#laravel-toolbar-shadow-host") ||
         node.closest("#laravel-toolbar-annotation-host"),
     );
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error ?? new Error("Could not read capture."));
+        reader.readAsDataURL(blob);
+    });
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {

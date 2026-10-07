@@ -526,7 +526,7 @@ export default function AnnotationPopup({
                             ? savedAnnotation.syncError
                             : "Could not save annotation to the local server."
                         : savedAnnotation.syncError === "Failed to fetch"
-                          ? "Could not send annotation to Orbit."
+                          ? "Could not send the annotation."
                           : savedAnnotation.syncError}
                     <button
                         type="button"

@@ -41,7 +41,8 @@ export type Annotation = {
     id: string;
     x: number;
     y: number;
-    threadId?: string;
+    /** Host context from the `metadata` hook. */
+    metadata?: Record<string, unknown>;
     comment: string;
     element: string;
     elementPath: string;
@@ -75,7 +76,8 @@ export type AnnotationDraft = {
     elementPath: string;
     boundingBox: AnnotationRect;
     isFixed: boolean;
-    threadId?: string;
+    /** Host context from the `metadata` hook. */
+    metadata?: Record<string, unknown>;
     comment: string;
     targetElement?: HTMLElement;
     url?: string;

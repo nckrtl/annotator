@@ -21,12 +21,10 @@ try {
         page.on("pageerror", (error) => errors.push(error.message));
         await page.context().route("https://annotation.test/**", async (route) => {
             const url = new URL(route.request().url());
-            if (url.pathname === "/thread") {
-                await route.fulfill({ json: { id: "detected-thread", title: "Annotation" } });
-            } else if (url.pathname === "/api/v1/tasks/status") {
-                await route.fulfill({ json: { data: { enabled: true } } });
-            } else if (url.pathname === "/annotations") {
-                await route.fulfill({ json: { data: [] } });
+            if (url.pathname === "/annotations") {
+                await route.fulfill({
+                    json: { data: [], meta: { service: "@nckrtl/annotator" } },
+                });
             } else if (url.pathname.endsWith(".js")) {
                 await route.fulfill({
                     contentType: "text/javascript; charset=utf-8",
@@ -35,53 +33,37 @@ try {
             } else {
                 const script =
                     mode === "inject"
-                        ? '<script>window.__AGENT_ANNOTATION__ = {serviceUrl:"/annotations",thread:{discoveryUrl:"/thread"}}</script><script src="/inject.js"></script>'
-                        : '<script type="module">import { mountAnnotation } from "/index.js"; window.annotation = mountAnnotation({serviceUrl:"/annotations",thread:{discoveryUrl:"/thread"}});</script>';
+                        ? '<script src="/inject.js"></script>'
+                        : '<script type="module">import { mountAnnotation } from "/index.js"; window.annotation = mountAnnotation();</script>';
                 await route.fulfill({
                     contentType: "text/html; charset=utf-8",
                     body: `<!doctype html><html><body><h1>Plain host</h1>${script}</body></html>`,
                 });
             }
         });
+        const listed =
+            mode === "inject" &&
+            page.waitForResponse((response) => response.url().endsWith("/annotations"));
         await page.goto("https://annotation.test/");
+        await listed;
+        await page.waitForTimeout(200);
         const button = page.getByRole("button", { name: "Enter annotation mode" });
         await button.waitFor();
         const size = await button.boundingBox();
         assert.ok(size.width >= 20 && size.height >= 20, "bundle includes control styles");
         await page.getByRole("button", { name: "Annotation settings", exact: true }).click();
-        await page.getByLabel("Delivery mode", { exact: true }).selectOption("orbit");
-        await page.getByText("Detected: Annotation", { exact: true }).waitFor();
+        // inject.js finds the annotation server that served it; a bundled import does not probe.
         assert.equal(
-            await page.getByLabel("T3 thread ID", { exact: true }).inputValue(),
-            "detected-thread",
+            await page.getByLabel("Annotation server URL", { exact: true }).inputValue(),
+            mode === "inject" ? "https://annotation.test/annotations" : "",
         );
-        await page.getByLabel("T3 thread ID", { exact: true }).fill("manual-thread");
-        await page.getByRole("button", { name: "Save", exact: true }).click();
-        await page.reload();
-        await page.getByRole("button", { name: "Annotation settings", exact: true }).click();
-        assert.equal(
-            await page.getByLabel("T3 thread ID", { exact: true }).inputValue(),
-            "manual-thread",
+        assert.deepEqual(
+            await page
+                .getByLabel("Delivery mode", { exact: true })
+                .locator("option")
+                .allTextContents(),
+            ["Local server"],
         );
-        const sibling = await page.context().newPage();
-        await sibling.goto("https://annotation.test/");
-        await sibling.getByRole("button", { name: "Annotation settings", exact: true }).click();
-        await sibling.getByLabel("Delivery mode", { exact: true }).selectOption("orbit");
-        await sibling.getByText("Detected: Annotation", { exact: true }).waitFor();
-        assert.equal(
-            await sibling.getByLabel("T3 thread ID", { exact: true }).inputValue(),
-            "detected-thread",
-        );
-        await sibling.close();
-        await page.getByLabel("T3 thread ID", { exact: true }).fill("");
-        await page.getByRole("button", { name: "Save", exact: true }).click();
-        await page.getByRole("button", { name: "Annotation settings", exact: true }).click();
-        assert.equal(await page.evaluate(() => sessionStorage.getItem("annotate:t3-thread")), "");
-        assert.equal(await page.getByLabel("T3 thread ID", { exact: true }).inputValue(), "");
-        await page.getByRole("button", { name: "Save", exact: true }).click();
-        assert.equal(await page.evaluate(() => sessionStorage.getItem("annotate:t3-thread")), "");
-        await page.reload();
-        await page.getByRole("button", { name: "Annotation settings", exact: true }).click();
         await page.getByRole("button", { name: "Close settings" }).click();
         await button.click();
         assert.equal(
@@ -133,7 +115,8 @@ try {
             const stop = page.getByRole("button", { name: "Stop dictation" });
             await stop.waitFor();
             // Wait for the audio connection before asking for the transcript.
-            await page.waitForTimeout(250);
+            for (let tries = 0; !connected && tries < 60; tries++) await page.waitForTimeout(50);
+            await page.waitForTimeout(100);
             assert.equal(
                 connected,
                 true,
@@ -426,21 +409,12 @@ try {
 
     {
         const page = await browser.newPage();
-        await page.addInitScript(() => {
-            sessionStorage.setItem(
-                "annotate:service",
-                JSON.stringify({ mode: "t3", serviceUrl: "", configUrl: "" }),
-            );
-            sessionStorage.setItem("annotate:t3-thread", "test-thread");
-        });
         let completeSubmission;
         const submission = new Promise((resolve) => {
             completeSubmission = resolve;
         });
         await page.route("https://annotation.test/**", async (route) => {
-            if (route.request().url().endsWith("/api/v1/tasks/status")) {
-                await route.fulfill({ json: { data: { enabled: true } } });
-            } else if (route.request().url().endsWith("/submit")) {
+            if (route.request().url().endsWith("/submit")) {
                 if (route.request().method() === "POST") {
                     await submission;
                     await route.fulfill({
@@ -457,7 +431,7 @@ try {
             } else {
                 await route.fulfill({
                     contentType: "text/html; charset=utf-8",
-                    body: '<h1>Delayed submission</h1><script>window.__AGENT_ANNOTATION__={serviceUrl:"/submit"};</script><script src="/inject.js"></script>',
+                    body: '<h1>Delayed submission</h1><script>window.__AGENT_ANNOTATION__={serverUrl:"/submit"};</script><script src="/inject.js"></script>',
                 });
             }
         });

@@ -1,44 +1,42 @@
-import { configureOrbit, type OrbitOptions } from "./orbit";
-export type { OrbitOptions } from "./orbit";
-import type { AnnotationRealtime } from "./realtime";
-export type { AnnotationRealtime } from "./realtime";
 import { configureAnnotationService } from "./sync";
-import { configureThread, type ThreadOptions } from "./thread";
-import { configureCommander, type CommanderConfig } from "./commander";
+import { configureTransports, type AnnotationTransport } from "./transport";
 import { configureToolbarData, type ToolbarData } from "./core/request-history";
+import { configureHostHooks, type AnnotationMetadataHook, type CaptureHook } from "./hooks";
 import { ensureAnnotationRuntime, teardownAnnotationRuntime } from "./runtime";
 import type { DictationInput } from "./dictation-settings";
 
 export type AnnotationOptions = {
     floatingControl?: boolean;
-    serviceUrl?: string;
-    /** Annotation server endpoint (not the Orbit Tasks API). */
+    /** Local annotation server endpoint, such as the URL printed by `annotator serve`. */
     serverUrl?: string;
-    orbit?: OrbitOptions;
-    realtime?: AnnotationRealtime;
-    thread?: ThreadOptions;
+    /** Same-origin endpoint probed when nothing is configured. inject.js sets it to its own server. */
+    discoverServerUrl?: string;
+    /** Extra delivery modes. The local server is always available as "server". */
+    transports?: AnnotationTransport[];
+    /** Delivery mode for a tab without a saved choice: "server" or a transport id. */
+    delivery?: string;
+    /** Extra context stored on each new annotation, such as a host session id. */
+    metadata?: AnnotationMetadataHook;
+    /** Supply real pixels for the screenshot, for example from Electron or CDP. */
+    capture?: CaptureHook;
     dictation?: DictationInput;
-    commander?: Partial<CommanderConfig>;
     getToolbarData?: () => ToolbarData;
 };
 
 /** Mount once per page; repeated calls update configuration without duplicating controls. */
 export function mountAnnotation(options: AnnotationOptions = {}) {
-    configureCommander({
-        enabled: false,
-        project: "commander",
-        endpoint: "/__orbit/commander/one-shot",
-        ...options.commander,
+    configureTransports(options.transports);
+    configureHostHooks(options);
+    configureAnnotationService({
+        serverUrl: options.serverUrl,
+        delivery: options.delivery,
+        discoverUrl: options.discoverServerUrl,
     });
-    configureOrbit(options.serviceUrl, options.orbit);
-    configureAnnotationService(options.serviceUrl, options.realtime, undefined, options.serverUrl);
-    configureThread(options.thread);
     configureToolbarData(options.getToolbarData);
     ensureAnnotationRuntime(options);
     return { destroy: teardownAnnotationRuntime };
 }
 
-export { configureCommander } from "./commander";
 export {
     clearAllAnnotations,
     clearPageAnnotations,
@@ -47,9 +45,16 @@ export {
     toggleAnnotationMode,
     setAnnotationMode,
 } from "./runtime";
-export type { Annotation } from "./types";
+export type { Annotation, AnnotationRect } from "./types";
 export type { DictationSettings } from "./dictation";
 export type { ToolbarData } from "./core/request-history";
+export type { AnnotationMetadataHook, AnnotationMetadataTarget, CaptureHook } from "./hooks";
+export type {
+    AnnotationTransport,
+    TransportAvailability,
+    TransportField,
+    TransportSubscription,
+} from "./transport";
 
 export {
     getAnnotationState,
@@ -58,4 +63,4 @@ export {
     saveAnnotationSettings,
 } from "./host-controls";
 export { checkAnnotationServer, type DeliveryMode } from "./sync";
-export { checkOrbit } from "./orbit";
+export { checkTransport } from "./transport";

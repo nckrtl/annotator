@@ -1,4 +1,4 @@
-/** Optional host context; no dependency on Laravel or Orbit. */
+/** Optional host context supplied by the host page. */
 export type ToolbarData = {
     primary_color?: string;
     primary_text_color?: string;

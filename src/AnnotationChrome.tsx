@@ -3,17 +3,11 @@ import { useRefValue } from "./state";
 import { useStore } from "./core/store";
 import { deliveryMode, localSessionCount } from "./sync";
 
-export type AnnotationChromeProps = {
-    /** Kept for call-site compatibility; commander is configured at app entry. */
-    commanderProject?: string;
-    commanderEnabled?: boolean;
-};
-
 /**
  * Optional footer chrome — toggles the same annotation mode as the floating FAB.
  * Runtime mount/teardown lives in main.tsx / ensureAnnotationRuntime (once).
  */
-export function AnnotationChrome(_props: AnnotationChromeProps = {}) {
+export function AnnotationChrome() {
     const isActive = useRefValue(annotationMode);
     const visibleCount = useRefValue(annotations).length;
     const mode = useStore(deliveryMode);
@@ -24,7 +18,7 @@ export function AnnotationChrome(_props: AnnotationChromeProps = {}) {
         <button
             type="button"
             data-feedback-toolbar=""
-            data-orbit-annotation-chrome=""
+            data-annotation-chrome=""
             data-active={isActive ? "" : undefined}
             aria-pressed={isActive}
             aria-label={isActive ? "Exit annotation mode" : "Enter annotation mode"}

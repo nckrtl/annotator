@@ -2,7 +2,7 @@ import type { Annotation, AnnotationDraft } from "./types";
 
 type ContextFields = Pick<
     Annotation,
-    | "threadId"
+    | "metadata"
     | "component"
     | "controller"
     | "route"
@@ -22,7 +22,7 @@ type ContextFields = Pick<
 
 export function annotationContextFields(current: AnnotationDraft | Annotation): ContextFields {
     const fields: ContextFields = {
-        threadId: current.threadId,
+        metadata: current.metadata,
         component: current.component,
         controller: current.controller,
         route: current.route,
@@ -87,7 +87,7 @@ export function annotationMetadataRows(
         });
     };
 
-    add("T3 thread", payload.threadId);
+    for (const [key, value] of Object.entries(payload.metadata ?? {})) add(key, value);
     add("URL", payload.url);
     add("Route", payload.route);
     add("Controller", payload.controller);

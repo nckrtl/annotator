@@ -1,3 +1,4 @@
+import { holdCapture } from "./capture-gate";
 import { postDictation } from "./post-dictation";
 import { useEffect, useRef, useState } from "react";
 import { dictate, type DictationSettings } from "./dictation";
@@ -99,6 +100,7 @@ export function useDictation(options: Options) {
 
         setEmptySpeech(false);
         setError(null);
+        const releaseCapture = holdCapture();
         session.current.stop = new AbortController();
         session.current.abort = new AbortController();
         if (session.current.settings.provider === "post") {
@@ -106,11 +108,13 @@ export function useDictation(options: Options) {
             setState("triggering");
             options.onBeforeTrigger();
             try {
-                const response = await postDictation(
+                const request = postDictation(
                     session.current.settings.postUrl!,
                     AbortSignal.any([session.current.abort.signal, AbortSignal.timeout(10000)]),
                     "dictate",
                 );
+                releaseCapture();
+                const response = await request;
                 if (!response.ok)
                     throw new Error(`Dictation trigger failed (HTTP ${response.status}).`);
             } catch (cause) {
@@ -122,6 +126,7 @@ export function useDictation(options: Options) {
                     );
                 }
             } finally {
+                releaseCapture();
                 if (!session.current.disposed) {
                     session.current.state = "idle";
                     setState("idle");
@@ -144,6 +149,7 @@ export function useDictation(options: Options) {
                 onLevels: (next) => {
                     setLevels(next);
                 },
+                onRecording: releaseCapture,
             });
 
             if (session.current.disposed) {
@@ -175,6 +181,7 @@ export function useDictation(options: Options) {
             session.current.state = "idle";
             setState("idle");
         } finally {
+            releaseCapture();
             stopElapsed();
             session.current.stop = null;
             session.current.abort = null;

@@ -8,8 +8,7 @@ import {
     saveServiceSettings,
     type DeliveryMode,
 } from "./sync";
-import { orbitAvailability } from "./orbit";
-import { threadSelection, selectThread } from "./thread";
+import { transportAvailability } from "./transport";
 
 const stores = [
     annotationMode.store,
@@ -18,8 +17,7 @@ const stores = [
     localSessionCount,
     serviceConnection,
     removalError,
-    orbitAvailability,
-    threadSelection.store,
+    transportAvailability,
 ];
 function snapshot() {
     const visibleCount = annotations.value.length;
@@ -34,8 +32,8 @@ function snapshot() {
         mode: deliveryMode.getSnapshot(),
         connection: serviceConnection.getSnapshot(),
         removalError: removalError.getSnapshot(),
-        orbit: orbitAvailability.getSnapshot(),
-        thread: threadSelection.value,
+        /** Last check result per transport id. */
+        transports: transportAvailability.getSnapshot(),
     };
 }
 let cached = snapshot();
@@ -55,13 +53,8 @@ export function subscribeAnnotationState(listener: () => void): () => void {
     return () => unsubscribe.forEach((stop) => stop());
 }
 export function getAnnotationSettings() {
-    return { ...serviceSettings(), threadId: threadSelection.value.id };
+    return serviceSettings();
 }
-export function saveAnnotationSettings(settings: {
-    mode: DeliveryMode;
-    serviceUrl: string;
-    threadId?: string;
-}): void {
+export function saveAnnotationSettings(settings: { mode: DeliveryMode; serviceUrl: string }): void {
     saveServiceSettings(settings.serviceUrl, settings.mode);
-    if (settings.threadId !== undefined) selectThread(settings.threadId);
 }

@@ -296,7 +296,7 @@ try {
         await page.unroute("**/__annotate/local/**");
     }
     console.log(
-        "HTTPS bridge: fresh annotations on two random ports, no direct browser loopback, no T3 metadata, live updates and refresh passed.",
+        "HTTPS bridge: fresh annotations on two random ports, no direct browser loopback, no transport metadata, live updates and refresh passed.",
     );
 } finally {
     await browser?.close();

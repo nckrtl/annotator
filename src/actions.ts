@@ -1,4 +1,4 @@
-import { threadSelection } from "./thread";
+import { annotationMetadata } from "./hooks";
 import { requestAnnotationMove } from "./outside-click";
 import { deepElementFromPoint, isAnnotationUi, isElementFixed } from "./dom";
 import { identifyElement } from "./identify";
@@ -18,6 +18,7 @@ import { isUnrelatedEditable, isDictationEnabled } from "./dictation-settings";
 import { resolveAnnotationContext } from "./context";
 import { annotationContextFields, annotationPayload } from "./payload";
 import { releaseMicrophone, warmMicrophone } from "./dictation";
+import { captureReady } from "./capture-gate";
 import { captureAnnotationScreenshot } from "./screenshot";
 import {
     clearSyncedAnnotations,
@@ -31,7 +32,8 @@ import { currentBreakpoint, currentScreenSize, currentScrollPosition } from "./v
 let currentPathname = "";
 let annotationGeneration = 0;
 let pendingPlacement: AnnotationDraft | null = null;
-let screenshotTimer = 0;
+let cancelScreenshot: (() => void) | null = null;
+const DICTATION_START_LIMIT_MS = 3000;
 
 function persist(): void {
     saveAnnotations(annotations.value, currentPathname || window.location.pathname);
@@ -48,9 +50,15 @@ export function draftFromPoint(clientX: number, clientY: number): AnnotationDraf
     const rect = element.getBoundingClientRect();
     const isFixed = isElementFixed(element);
 
+    const metadata = annotationMetadata({
+        element,
+        url: window.location.href,
+        pathname: window.location.pathname,
+    });
+
     return {
         draftId: createAnnotationId(),
-        threadId: threadSelection.value.id || undefined,
+        ...(metadata ? { metadata } : {}),
         x: (clientX / window.innerWidth) * 100,
         y: isFixed ? clientY : clientY + window.scrollY,
         clientX,
@@ -81,32 +89,61 @@ export function shakeDraft(): void {
 
 function clearPendingPlacement(): void {
     pendingPlacement = null;
-
-    if (screenshotTimer) {
-        window.clearTimeout(screenshotTimer);
-        screenshotTimer = 0;
-    }
+    cancelScreenshot?.();
+    cancelScreenshot = null;
 }
 
+/**
+ * A DOM render of a large page takes long enough to delay the popup and the dictation
+ * request. Start it only after the popup has painted and its effects have run, when the
+ * browser is idle, and attach the image to the draft when it is ready.
+ */
 function scheduleDraftScreenshot(target: AnnotationDraft): void {
-    if (typeof window === "undefined") {
-        void attachDraftScreenshot(target);
-        return;
-    }
-
-    window.clearTimeout(screenshotTimer);
-    screenshotTimer = window.setTimeout(() => {
-        screenshotTimer = 0;
-        void attachDraftScreenshot(target);
-    }, 0);
+    cancelScreenshot?.();
+    const scroll = { x: window.scrollX, y: window.scrollY };
+    let cancelled = false;
+    let idle = 0;
+    // Two frames: the popup has painted and its effects, including dictation, have started.
+    let frame = window.requestAnimationFrame(() => {
+        frame = window.requestAnimationFrame(() => {
+            frame = 0;
+            void captureReady(DICTATION_START_LIMIT_MS).then(() => {
+                if (cancelled) return;
+                idle = requestIdle(() => {
+                    idle = 0;
+                    cancelScreenshot = null;
+                    if (draft.value === target) void attachDraftScreenshot(target, scroll);
+                });
+            });
+        });
+    });
+    cancelScreenshot = () => {
+        cancelled = true;
+        if (frame) window.cancelAnimationFrame(frame);
+        if (idle) cancelIdle(idle);
+    };
 }
 
-async function attachDraftScreenshot(target: AnnotationDraft): Promise<void> {
+function requestIdle(callback: () => void): number {
+    return typeof window.requestIdleCallback === "function"
+        ? window.requestIdleCallback(callback, { timeout: 1000 })
+        : window.setTimeout(callback, 50);
+}
+
+function cancelIdle(handle: number): void {
+    if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle);
+    else window.clearTimeout(handle);
+}
+
+async function attachDraftScreenshot(
+    target: AnnotationDraft,
+    scroll: { x: number; y: number },
+): Promise<void> {
     if (target.screenshot) {
         return;
     }
 
-    const screenshot = await captureAnnotationScreenshot(target);
+    const screenshot = await captureAnnotationScreenshot(target, scroll);
 
     if (!screenshot) {
         return;
@@ -481,7 +518,7 @@ function resetPagePins(): void {
     annotations.value = [];
 }
 
-/** Local server mode removes stored work; Orbit mode only dismisses browser pins. */
+/** Local server mode removes stored work; transports only dismiss browser pins. */
 export function clearAllAnnotations(): void {
     annotationGeneration += 1;
     void clearSyncedAnnotations().then((removed) => {
@@ -617,7 +654,7 @@ export function handleDocumentMouseDown(event: MouseEvent): void {
         return;
     }
 
-    // Pane rows navigate on mousedown — consume before Orbit handlers run.
+    // Host UIs can act on mousedown (for example, list rows that navigate): consume it first.
     consumeAnnotationGesture(event);
 
     if (draft.value) {
@@ -631,8 +668,8 @@ export function handleDocumentMouseDown(event: MouseEvent): void {
         return;
     }
 
+    // Capturing here would delay the popup; the click schedules it once the popup is open.
     pendingPlacement = nextDraft;
-    scheduleDraftScreenshot(nextDraft);
 }
 
 export function handleDocumentClick(event: MouseEvent): void {
@@ -658,7 +695,6 @@ export function handleDocumentClick(event: MouseEvent): void {
     consumeAnnotationGesture(event);
 
     const nextDraft = pendingPlacement ?? draftFromPoint(event.clientX, event.clientY);
-    const prepared = pendingPlacement;
     pendingPlacement = null;
 
     if (!nextDraft) {
@@ -668,7 +704,7 @@ export function handleDocumentClick(event: MouseEvent): void {
     draft.value = nextDraft;
     hover.value = null;
 
-    if (!prepared && !nextDraft.screenshot) {
+    if (!nextDraft.screenshot) {
         scheduleDraftScreenshot(nextDraft);
     }
 }
