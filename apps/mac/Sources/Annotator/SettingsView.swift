@@ -44,7 +44,8 @@ struct SettingsView: View {
                     TextField("URL", text: $serverDraft, prompt: Text(Settings.defaultServerURL))
                         .onSubmit { apply() }
                     if Settings.validURL(serverDraft) == nil {
-                        Text("Enter an http or https URL.").font(.caption).foregroundStyle(.red)
+                        Text("Use https, or http on 127.0.0.1 or localhost. No user name, query, or fragment.")
+                            .font(.caption).foregroundStyle(.red)
                     }
                 }
                 Section("Shortcut") {
@@ -76,8 +77,9 @@ struct SettingsView: View {
                         .onSubmit { apply() }
                     Text("Annotator reads the Local API token from the app's control.json.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if settings.ofideEnabled && Settings.validURL(ofideDraft) == nil {
-                        Text("Enter an http or https URL.").font(.caption).foregroundStyle(.red)
+                    if settings.ofideEnabled && Settings.loopbackURL(ofideDraft) == nil {
+                        Text("Use http or https on 127.0.0.1 or localhost, with no user name, query, or fragment.")
+                            .font(.caption).foregroundStyle(.red)
                     }
                 }
                 Section("Conn") {
@@ -85,9 +87,12 @@ struct SettingsView: View {
                     TextField("Server endpoint", text: $t3EndpointDraft, prompt: Text("http://127.0.0.1:3780"))
                     SecureField("Access token", text: $t3TokenDraft, prompt: Text("Leave blank to keep the saved token"))
                     Button("Save Connection") {
-                        guard let url = Settings.validURL(t3EndpointDraft), url.user == nil, url.password == nil,
-                              url.query == nil, url.fragment == nil, url.path.isEmpty || url.path == "/" else {
-                            t3ConnectionMessage = "Enter an http or https server origin without a path."
+                        guard let url = Settings.validURL(t3EndpointDraft) else {
+                            t3ConnectionMessage = "Use https, or http on 127.0.0.1 or localhost. No user name, query, or fragment."
+                            return
+                        }
+                        guard url.path.isEmpty || url.path == "/" else {
+                            t3ConnectionMessage = "Enter a server origin without a path."
                             return
                         }
                         let endpoint = url.absoluteString.hasSuffix("/") ? String(url.absoluteString.dropLast()) : url.absoluteString
@@ -142,7 +147,7 @@ struct SettingsView: View {
 
     private func apply() {
         if Settings.validURL(serverDraft) != nil, serverDraft != settings.serverURL { settings.serverURL = serverDraft }
-        if Settings.validURL(ofideDraft) != nil, ofideDraft != settings.ofideURL { settings.ofideURL = ofideDraft }
+        if Settings.loopbackURL(ofideDraft) != nil, ofideDraft != settings.ofideURL { settings.ofideURL = ofideDraft }
     }
 
     private func startRecording() {

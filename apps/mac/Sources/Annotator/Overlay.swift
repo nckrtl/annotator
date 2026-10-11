@@ -137,7 +137,7 @@ final class OverlayController {
                 guard let point = queuedPoint else { break }
                 queuedPoint = nil
                 lastHitTest = Date()
-                let target = await resolve(point)
+                let target = await resolve(point, dom: false)
                 if case .hovering = state {
                     state = .hovering(target)
                     redraw()
@@ -149,14 +149,16 @@ final class OverlayController {
 
     private func selectElement(at point: CGPoint) async {
         // Hit-test again at the click point, so a stale hover result is never used.
-        guard let target = await resolve(point) else { return }
+        guard let target = await resolve(point, dom: true) else { return }
         guard case .hovering = state else { return }
         freeze(target)
     }
 
-    /// Accessibility first; then the real DOM element when the app has a DevTools port.
-    private func resolve(_ point: CGPoint) async -> Target? {
-        guard let target = await reader.target(at: point) else { return nil }
+    /// Accessibility first. `dom` asks DevTools for the real element. Hover leaves it off:
+    /// a probe on every move stalls the highlight and runs script in the page.
+    private func resolve(_ point: CGPoint, dom: Bool) async -> Target? {
+        guard let target = await reader.target(at: point, text: dom) else { return nil }
+        guard dom else { return target }
         let appKitPoint = Geometry.appKit(fromTopLeft: CGRect(origin: point, size: .zero), mainScreenHeight: NSScreen.mainHeight).origin
         let scale = NSScreen.screens.first { $0.frame.contains(appKitPoint) }?.backingScaleFactor ?? 2
         return await devTools.inspect(target, at: point, scale: Double(scale))

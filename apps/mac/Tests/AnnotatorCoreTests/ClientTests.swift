@@ -85,6 +85,29 @@ struct AnnotationClientTests {
         #expect(await !AnnotationClient(base: base, transport: failing).delete(id: "x"))
     }
 
+    @Test func deleteRejectsPathIds() async {
+        let seen = Box<URLRequest>()
+        let client = AnnotationClient(base: base) { request in
+            seen.value = request
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        #expect(await !client.delete(id: "../secret"))
+        #expect(await !client.delete(id: "foo/bar"))
+        #expect(seen.value == nil)
+    }
+
+    @Test func queueDropsScreenshots() async throws {
+        let body = #"""
+        {"data":[{"id":"a","number":1,"status":"todo","comment":"x","screenshot":"data:image/jpeg;base64,AAAA"}],
+         "meta":{"service":"@nckrtl/annotator"}}
+        """#
+        let client = AnnotationClient(base: base, transport: stub(status: 200, body: body))
+        let summary = try await client.queue()
+        #expect(summary.item(id: "a")?.screenshot == nil)
+        #expect(await client.screenshot(id: "a") == "data:image/jpeg;base64,AAAA")
+        #expect(await client.screenshot(id: "../secret") == nil)
+    }
+
     @Test func queueSummary() async throws {
         let body = #"""
         {"data":[

@@ -32,6 +32,16 @@ t3() { ELECTRON_RUN_AS_NODE=1 "$executable" "$script" "$@"; }
 
 fail() { echo "error: $*" >&2; exit 1; }
 
+# Plist text. Quotes are legal in a string value; &, <, and > are not.
+xml_escape() {
+    local value=$1
+    # In ${var/pattern/replacement}, & means the matched text, so a literal & is \&.
+    value=${value//&/\&amp;}
+    value=${value//</\&lt;}
+    value=${value//>/\&gt;}
+    printf '%s' "$value"
+}
+
 install() {
     [ -n "$executable_name" ] && [ -f "$executable" ] && [ -x "$executable" ] || fail "Conn (or T3 Code) not found at $app. Set T3_APP."
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && ! launchctl print "$domain/$label" >/dev/null 2>&1; then
@@ -48,37 +58,47 @@ install() {
     if [ ! -e "$home/userdata/themes" ] && [ -d "$HOME/.t3/userdata/themes" ]; then cp -R "$HOME/.t3/userdata/themes" "$home/userdata/themes"; fi
 
     mkdir -p "$(dirname "$plist")"
-    # PATH from this shell, so the server finds codex, claude and the other provider CLIs.
+    # A fixed PATH. The installer's PATH is not copied. claude and codex must be on this list:
+    # the native installer puts claude in ~/.local/bin.
+    service_path="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    xml_label=$(xml_escape "$label")
+    xml_executable=$(xml_escape "$executable")
+    xml_cache=$(xml_escape "$cache")
+    xml_script=$(xml_escape "$script")
+    xml_home=$(xml_escape "$home")
+    xml_port=$(xml_escape "$port")
+    xml_path=$(xml_escape "$service_path")
+    xml_workdir=$(xml_escape "$HOME")
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>$label</string>
+	<string>$xml_label</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>$executable</string>
+		<string>$xml_executable</string>
 		<string>--require</string>
-		<string>$cache</string>
-		<string>$script</string>
+		<string>$xml_cache</string>
+		<string>$xml_script</string>
 		<string>serve</string>
 		<string>--base-dir</string>
-		<string>$home</string>
+		<string>$xml_home</string>
 		<string>--host</string>
 		<string>127.0.0.1</string>
 		<string>--port</string>
-		<string>$port</string>
+		<string>$xml_port</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>ELECTRON_RUN_AS_NODE</key>
 		<string>1</string>
 		<key>PATH</key>
-		<string>$PATH</string>
+		<string>$xml_path</string>
 	</dict>
 	<key>WorkingDirectory</key>
-	<string>$HOME</string>
+	<string>$xml_workdir</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -88,9 +108,9 @@ install() {
 	<key>ProcessType</key>
 	<string>Interactive</string>
 	<key>StandardOutPath</key>
-	<string>$home/userdata/logs/headless.log</string>
+	<string>$xml_home/userdata/logs/headless.log</string>
 	<key>StandardErrorPath</key>
-	<string>$home/userdata/logs/headless.log</string>
+	<string>$xml_home/userdata/logs/headless.log</string>
 </dict>
 </plist>
 EOF

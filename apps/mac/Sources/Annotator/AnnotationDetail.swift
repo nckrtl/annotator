@@ -8,6 +8,9 @@ struct AnnotationDetailView: View {
     @ObserveInjection var injection
     let id: String
     let queue: QueueMonitor
+    /// Reads the screenshot once. The live queue does not keep it.
+    let loadScreenshot: () async -> String?
+    @State private var screenshot: String?
 
     /// The title bar's height with an empty unified toolbar. That style moves the window buttons
     /// inward and down; the custom title and status are centered in the same bar.
@@ -46,7 +49,7 @@ struct AnnotationDetailView: View {
                     Divider()
                     // No scroll view: the window takes the size of its content, so everything is visible.
                     VStack(alignment: .leading, spacing: 18) {
-                        if let image = AnnotationDetailView.image(item.screenshot) {
+                        if let image = AnnotationDetailView.image(screenshot) {
                             ScreenshotPreview(image: image, width: AnnotationDetailView.contentWidth)
                         } else {
                             Text("No screenshot.").foregroundStyle(.secondary)
@@ -67,6 +70,7 @@ struct AnnotationDetailView: View {
                     .background(FrostedBackground.layer)
             }
         }
+        .task(id: id) { screenshot = await loadScreenshot() }
         .enableInjection()
     }
 

@@ -29,10 +29,10 @@ public struct LocalServer: Sendable {
     public func run(_ command: String) async throws -> Result {
         try await Task.detached {
             let files = FileManager.default
-            let candidates = [".vite-plus/bin/node", ".local/share/mise/shims/node"].map {
-                home.appending(path: $0).path
-            } + ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
-            guard let node = candidates.first(where: { files.isExecutableFile(atPath: $0) }) else {
+            // Fixed locations first, so a planted file under the home directory does not outrank them.
+            let candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+                + [".local/share/mise/shims/node", ".vite-plus/bin/node"].map { home.appending(path: $0).path }
+            guard let node = candidates.first(where: { LocalServer.isTrustedExecutable($0) }) else {
                 throw Failure("Node.js was not found. Install Node.js 22 or newer to start the annotation server.")
             }
             let script = home.appending(path: "apps/annotator/bin/serve.mjs")
@@ -61,13 +61,36 @@ public struct LocalServer: Sendable {
                 throw Failure("The server command timed out. See \(log.path).")
             }
             let data = try Data(contentsOf: output)
-            guard let result = try? JSONDecoder().decode(Result.self, from: data) else {
+            // Node may print a warning before the script's JSON line. The result is the last object.
+            guard let result = LocalServer.result(in: data) else {
                 throw Failure(String(data: data, encoding: .utf8) ?? "The server returned an unreadable response.")
             }
             if let error = result.error { throw Failure(error) }
             guard process.terminationStatus == 0 else { throw Failure("The server command failed. See \(log.path).") }
             return result
         }.value
+    }
+
+    /// The script prints one JSON object. Lines before it, such as a runtime warning, are ignored.
+    static func result(in data: Data) -> Result? {
+        let text = String(data: data, encoding: .utf8) ?? ""
+        for line in text.split(whereSeparator: \.isNewline).reversed() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.first == "{",
+                let result = try? JSONDecoder().decode(Result.self, from: Data(trimmed.utf8))
+            else { continue }
+            return result
+        }
+        return nil
+    }
+
+    /// Executable, and not writable by everyone. A world-writable Node would run as the user.
+    static func isTrustedExecutable(_ path: String) -> Bool {
+        let files = FileManager.default
+        guard files.isExecutableFile(atPath: path),
+            let mode = try? files.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
+        else { return false }
+        return mode.uint16Value & 0o002 == 0
     }
 
     public struct Failure: LocalizedError {

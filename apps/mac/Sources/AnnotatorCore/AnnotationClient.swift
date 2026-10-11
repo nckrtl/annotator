@@ -182,12 +182,27 @@ public struct AnnotationClient: Sendable {
     }
 
     /// Deletes one record. True when the server removed it or never had it.
+    /// Ids that are not the server's grammar are refused here, so `../` cannot leave `/annotations`.
     public func delete(id: String) async -> Bool {
-        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return false }
-        var request = URLRequest(url: base.appending(path: encoded, directoryHint: .notDirectory))
+        guard Annotation.isValidID(id) else { return false }
+        var request = URLRequest(url: base.appending(path: id, directoryHint: .notDirectory))
         request.httpMethod = "DELETE"
         guard let (_, response) = try? await transport(request) else { return false }
         return response.statusCode == 200 || response.statusCode == 404
+    }
+
+    /// The screenshot for one record. The live queue does not keep these.
+    public func screenshot(id: String) async -> String? {
+        guard Annotation.isValidID(id) else { return nil }
+        let data: Data
+        let response: HTTPURLResponse
+        do { (data, response) = try await transport(URLRequest(url: base)) } catch { return nil }
+        guard response.statusCode == 200,
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            (body["meta"] as? [String: Any])?["service"] as? String == "@nckrtl/annotator",
+            let items = body["data"] as? [[String: Any]]
+        else { return nil }
+        return items.first { $0["id"] as? String == id }?["screenshot"] as? String
     }
 
     public func queue() async throws(QueueError) -> QueueSummary {
@@ -202,7 +217,9 @@ public struct AnnotationClient: Sendable {
             throw .unreachable(error.localizedDescription)
         }
         guard response.statusCode == 200 else { throw .badStatus(response.statusCode) }
-        guard let body = try? JSONDecoder().decode(Body.self, from: data),
+        // Screenshots dominate the payload. The menu never draws them, so they are not kept on the live queue.
+        let slim = JSONRedactor.nullifyStrings(named: ["screenshot"], in: data)
+        guard let body = try? JSONDecoder().decode(Body.self, from: slim),
             body.meta?.service == "@nckrtl/annotator"
         else { throw .notAnnotationServer }
         return QueueSummary(items: body.data)

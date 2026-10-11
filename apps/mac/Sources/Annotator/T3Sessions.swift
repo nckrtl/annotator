@@ -136,7 +136,8 @@ final class T3Sessions {
         latest = (summary, projects)
         guard settings.t3Enabled, settings.t3Nudge, !nudging, !sessions.isEmpty else { return }
         let work: [(Project, Session, [QueueItem])] = projects.compactMap { project in
-            guard let session = session(project) else { return nil }
+            // A full-access thread runs tools without asking. Do not feed it new work on its own.
+            guard project.t3RuntimeMode != "full-access", let session = session(project) else { return nil }
             let since = Int64(session.started.timeIntervalSince1970 * 1000)
             let fresh = summary.open.filter {
                 $0.status == "todo" && $0.question != true && $0.native?.project == project.name
@@ -215,13 +216,20 @@ final class T3Sessions {
             throw T3Error.notRunning(
                 "Could not find Conn's command-line tool from its running server (pid \(runtime.pid)). Is the Conn server running?")
         }
+        guard AppBundleTrust.installed(executable: executable, script: script) else {
+            throw T3Error.unexpected("The Conn command-line tool must be inside an app in /Applications.")
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         return try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = [script] + arguments
-            var environment = ProcessInfo.processInfo.environment
-            environment["ELECTRON_RUN_AS_NODE"] = "1"
-            process.environment = environment
+            // The server's environment can hold tokens. Pass only what the CLI needs.
+            process.environment = [
+                "ELECTRON_RUN_AS_NODE": "1",
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                "HOME": home,
+            ]
             let out = Pipe()
             let err = Pipe()
             process.standardOutput = out

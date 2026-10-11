@@ -29,7 +29,8 @@ public struct AXElementInfo: Sendable, Equatable {
         self.title = title
         self.description = description
         self.identifier = identifier
-        self.value = value.map { AXElementInfo.truncate($0) }
+        let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField"
+        self.value = secure ? nil : value.map { AXElementInfo.truncate($0) }
         self.help = help
         self.domId = domId.flatMap { $0.isEmpty ? nil : $0 }
         self.domClasses = domClasses
