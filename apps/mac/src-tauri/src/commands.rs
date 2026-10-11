@@ -3,7 +3,7 @@
 use crate::app::{self, shared};
 use crate::conn::{self, keychain};
 use crate::projects::{agent_prompt, Routes, Scope};
-use crate::settings::{home, valid_url, Settings};
+use crate::settings::{home, Settings};
 use crate::{helper, ofide, panels, windows};
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -177,7 +177,7 @@ pub fn resize_comment(app: AppHandle, height: f64) {
 #[tauri::command]
 pub async fn ofide(app: AppHandle, action: String) -> Result<Value, String> {
     let settings = app::settings(&app);
-    let base = valid_url(&settings.ofide_url).ok_or("The Ofide URL in Settings is not valid.")?;
+    let base = settings.ofide().ok_or("The Ofide URL in Settings is not valid.")?;
     let token = ofide::read_token(&ofide::token_file(&settings.ofide_app, &home()))?;
     let client = ofide::OfideClient::new(base, token);
     let answer = shared(&app).ofide.run(&client, &action).await?;
@@ -216,9 +216,7 @@ pub fn hotkey_recording(app: AppHandle, recording: bool) {
 
 #[tauri::command]
 pub fn conn_save_connection(app: AppHandle, endpoint: String, token: String) -> Result<String, String> {
-    let Some(endpoint) = conn::endpoint(&endpoint) else {
-        return Err("Enter an http or https server origin without a path.".into());
-    };
+    let endpoint = conn::endpoint(&endpoint)?;
     if !token.is_empty() {
         keychain::save(&token, &endpoint).map_err(|e| e.to_string())?;
     }
@@ -293,6 +291,12 @@ pub async fn get_permissions(app: AppHandle) -> app::Permissions {
 #[tauri::command]
 pub fn get_queue(app: AppHandle) -> Vec<Value> {
     shared(&app).queue.items()
+}
+
+/// The screenshot of one record. The live queue does not keep them.
+#[tauri::command]
+pub async fn get_screenshot(app: AppHandle, id: String) -> Option<String> {
+    app::client(&app)?.screenshot(&id).await
 }
 
 #[tauri::command]

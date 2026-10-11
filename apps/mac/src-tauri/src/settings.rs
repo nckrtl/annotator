@@ -1,6 +1,7 @@
 //! User settings (Settings.swift, Hotkey.swift), stored as JSON in
 //! `~/Library/Application Support/com.nckrtl.annotator/settings.json`.
 
+use crate::service_url;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -101,6 +102,7 @@ pub struct Settings {
     pub t3_home: String,
     /// The data folder of the Conn window that shows the sessions.
     pub t3_window_home: String,
+    /// Off for new installs: annotations are not sent onward unless the user asks. A saved choice is kept.
     pub t3_nudge: bool,
     /// The model for sessions whose project sets none, as `instance/model`.
     pub t3_default_model: String,
@@ -121,7 +123,7 @@ impl Default for Settings {
             t3_effort: "medium".into(),
             t3_home: "~/.t3/headless".into(),
             t3_window_home: "~/.t3/desktop-dev".into(),
-            t3_nudge: true,
+            t3_nudge: false,
             t3_default_model: "claudeAgent/claude-opus-5-5".into(),
             hotkey: Hotkey::STANDARD,
         }
@@ -130,15 +132,6 @@ impl Default for Settings {
 
 pub fn ofide_default_url(app: &str) -> &'static str {
     if app == OFIDE_DEV { "http://127.0.0.1:12322" } else { "http://127.0.0.1:12321" }
-}
-
-/// An http(s) URL with a host, or None.
-pub fn valid_url(text: &str) -> Option<url::Url> {
-    let url = url::Url::parse(text.trim()).ok()?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none_or(str::is_empty) {
-        return None;
-    }
-    Some(url)
 }
 
 pub fn home() -> PathBuf {
@@ -166,7 +159,12 @@ impl Settings {
     }
 
     pub fn server(&self) -> Option<url::Url> {
-        valid_url(&self.server_url)
+        service_url::parse(&self.server_url)
+    }
+
+    /// Ofide carries the Local API token, so its URL must be on this machine.
+    pub fn ofide(&self) -> Option<url::Url> {
+        service_url::loopback(&self.ofide_url)
     }
 
     /// A missing file gives the defaults. A broken file is kept aside, so it is never lost silently.
@@ -190,8 +188,8 @@ impl Settings {
 
     /// Applies an edit like SettingsView.apply: invalid URLs and an invalid shortcut keep the old value.
     pub fn merged(&self, mut new: Settings) -> Settings {
-        if valid_url(&new.server_url).is_none() { new.server_url = self.server_url.clone(); }
-        if valid_url(&new.ofide_url).is_none() { new.ofide_url = self.ofide_url.clone(); }
+        if new.server().is_none() { new.server_url = self.server_url.clone(); }
+        if new.ofide().is_none() { new.ofide_url = self.ofide_url.clone(); }
         if !new.hotkey.is_valid() { new.hotkey = self.hotkey; }
         if new.ofide_app != OFIDE && new.ofide_app != OFIDE_DEV { new.ofide_app = self.ofide_app.clone(); }
         new
@@ -236,21 +234,15 @@ mod tests {
     }
 
     #[test]
-    fn valid_urls() {
-        assert!(valid_url(" http://127.0.0.1:29703/annotations ").is_some());
-        assert!(valid_url("https://example.com").is_some());
-        assert!(valid_url("ftp://example.com").is_none());
-        assert!(valid_url("annotations").is_none());
-        assert!(valid_url("").is_none());
-    }
-
-    #[test]
     fn defaults_and_partial_files() {
         let settings: Settings = serde_json::from_str(r#"{"serverURL":"http://localhost:1/annotations"}"#).unwrap();
         assert_eq!(settings.server_url, "http://localhost:1/annotations");
         assert!(settings.server_auto_start);
         assert_eq!(settings.hotkey, Hotkey::STANDARD);
         assert_eq!(settings.t3_default_model, "claudeAgent/claude-opus-5-5");
+        assert!(!settings.t3_nudge);
+        let saved: Settings = serde_json::from_str(r#"{"t3Nudge":true}"#).unwrap();
+        assert!(saved.t3_nudge);
         let json = serde_json::to_value(Settings::default()).unwrap();
         for key in ["serverAutoStart", "serverURL", "ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp",
             "t3Enabled", "t3Endpoint", "t3Effort", "t3Home", "t3WindowHome", "t3Nudge", "t3DefaultModel"] {
@@ -263,12 +255,14 @@ mod tests {
     fn merge_keeps_invalid_values_out() {
         let old = Settings::default();
         let mut new = old.clone();
-        new.server_url = "nope".into();
+        new.server_url = "http://example.com/annotations".into();
+        new.ofide_url = "https://example.com".into();
         new.hotkey = Hotkey { key_code: 1, modifiers: SHIFT };
-        new.t3_nudge = false;
+        new.t3_nudge = true;
         let merged = old.merged(new);
         assert_eq!(merged.server_url, DEFAULT_SERVER_URL);
+        assert_eq!(merged.ofide_url, "http://127.0.0.1:12321");
         assert_eq!(merged.hotkey, Hotkey::STANDARD);
-        assert!(!merged.t3_nudge);
+        assert!(merged.t3_nudge);
     }
 }

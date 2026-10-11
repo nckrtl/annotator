@@ -24,6 +24,9 @@ struct Inner {
     items: Vec<Value>,
     failed_polls: u32,
     generation: u64,
+    /// The generation a download runs for. One at a time: a second caller asks for one more pass.
+    refreshing: Option<u64>,
+    needs_refresh: bool,
     task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
@@ -40,9 +43,8 @@ pub struct QueueMonitor {
 
 impl QueueMonitor {
     pub fn new(on_change: impl Fn() + Send + Sync + 'static, on_reachable: impl Fn() + Send + Sync + 'static) -> Arc<QueueMonitor> {
-        // No total timeout: the stream stays open. Each read times out instead (see listen).
-        let stream = reqwest::Client::builder().connect_timeout(Duration::from_secs(45)).build().expect("HTTP client");
-        Arc::new(QueueMonitor { inner: Mutex::default(), on_change: Box::new(on_change), on_reachable: Box::new(on_reachable), stream })
+        Arc::new(QueueMonitor { inner: Mutex::default(), on_change: Box::new(on_change), on_reachable: Box::new(on_reachable),
+            stream: crate::http::event_stream() })
     }
 
     pub fn connection(&self) -> Connection {
@@ -53,7 +55,7 @@ impl QueueMonitor {
         self.inner.lock().unwrap().summary.clone()
     }
 
-    /// The full records from the server, screenshots included.
+    /// The full records from the server, with `screenshot` null (see `AnnotationClient::screenshot`).
     pub fn items(&self) -> Vec<Value> {
         self.inner.lock().unwrap().items.clone()
     }
@@ -68,6 +70,7 @@ impl QueueMonitor {
             inner.summary = None;
             inner.items = Vec::new();
             inner.failed_polls = 0;
+            inner.needs_refresh = false;
             inner.connection = Some(if client.is_some() { Connection::Connecting } else { Connection::InvalidUrl });
             inner.generation
         };
@@ -93,13 +96,22 @@ impl QueueMonitor {
     async fn run(&self, client: AnnotationClient, generation: u64) {
         loop {
             self.listen(&client, generation).await;
+            // A server that is not the annotation server will not become one by being asked again.
+            // A new URL starts a new run.
+            if self.wrong_server() {
+                return;
+            }
             // The stream dropped or never opened. Poll until the server answers, then try the stream again.
             loop {
                 tokio::time::sleep(Duration::from_secs(3)).await;
-                if !self.current(generation) {
+                if !self.current(generation) || self.wrong_server() {
                     return;
                 }
-                if self.refresh(&client, generation).await {
+                let recovered = self.refresh(&client, generation).await;
+                if self.wrong_server() {
+                    return;
+                }
+                if recovered {
                     break;
                 }
             }
@@ -108,6 +120,10 @@ impl QueueMonitor {
 
     fn current(&self, generation: u64) -> bool {
         self.inner.lock().unwrap().generation == generation
+    }
+
+    fn wrong_server(&self) -> bool {
+        self.inner.lock().unwrap().connection == Some(Connection::WrongServer)
     }
 
     async fn listen(&self, client: &AnnotationClient, generation: u64) {
@@ -139,7 +155,34 @@ impl QueueMonitor {
         }
     }
 
+    /// One download at a time per generation. A second caller waits for one more pass instead of
+    /// starting its own.
     async fn refresh(&self, client: &AnnotationClient, generation: u64) -> bool {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.refreshing == Some(generation) {
+                inner.needs_refresh = true;
+                return true;
+            }
+            inner.refreshing = Some(generation);
+        }
+        let mut ok;
+        loop {
+            self.inner.lock().unwrap().needs_refresh = false;
+            ok = self.load(client, generation).await;
+            let inner = self.inner.lock().unwrap();
+            if !inner.needs_refresh || inner.generation != generation {
+                break;
+            }
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.refreshing == Some(generation) {
+            inner.refreshing = None;
+        }
+        ok
+    }
+
+    async fn load(&self, client: &AnnotationClient, generation: u64) -> bool {
         let result = client.queue().await;
         let mut inner = self.inner.lock().unwrap();
         if inner.generation != generation {
@@ -235,6 +278,28 @@ mod tests {
         assert_eq!(monitor.connection(), Connection::Polling);
         assert_eq!(monitor.summary().unwrap().todo, 1);
         assert_eq!(reachable.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn refreshes_coalesce() {
+        let server = serve(vec![Reply::new(200, BODY).delayed(200)]);
+        let (monitor, _) = monitor();
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (a, b, c) = tokio::join!(monitor.refresh(&client, 0), monitor.refresh(&client, 0), monitor.refresh(&client, 0));
+        assert!(a && b && c);
+        // The first download, then one more pass for the two callers that waited.
+        assert_eq!(server.paths().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn wrong_server_stops_the_run() {
+        let server = serve(vec![Reply::new(404, ""), Reply::new(200, r#"{"data":[]}"#)]);
+        let (monitor, _) = monitor();
+        let run = tokio::time::timeout(Duration::from_secs(10),
+            monitor.run(AnnotationClient::new(server.url("/annotations")), 0)).await;
+        assert!(run.is_ok(), "the run kept polling");
+        assert_eq!(monitor.connection(), Connection::WrongServer);
+        assert_eq!(server.paths().len(), 2);
     }
 
     #[tokio::test]

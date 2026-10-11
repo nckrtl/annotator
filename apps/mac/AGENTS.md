@@ -10,7 +10,9 @@ Coding agents claim the queue, make the change, and mark each item done.
 It is the system-wide version of the web annotator. It works on native apps,
 Electron apps, browsers and anything else on screen.
 
-Nothing is built yet. This file is the brief. Read it all before you start.
+Phase 1 is built: a Tauri 2 app with React views, a Rust core and a Swift
+helper, on Ofide's stack (`~/apps/ofide/mac`). Read this file before you
+change anything.
 
 ## Status and scope
 
@@ -18,8 +20,7 @@ Nothing is built yet. This file is the brief. Read it all before you start.
   remote yet. Ask the user before you create one.
 - The web package lives at `~/apps/annotator`. Do not change it from here.
   This app only talks to its server over HTTP.
-- Build phase 1 first (below). Stop after it, show the user, and wait for
-  feedback before phase 2.
+- Phase 1 is done. Ask the user before you start phase 2.
 
 ## Users and principles
 
@@ -183,68 +184,77 @@ full API. If Ofide is not running, show that next to the button.
 
 ## Tech and layout
 
-- Swift 6, SwiftUI for windows and settings, AppKit for the overlay panels and
-  the menu bar (`NSStatusItem`). Minimum macOS 15. No third-party
-  dependencies in phase 1.
-- Swift Package Manager, not an Xcode project, so the repo stays text-only and
-  diffable. One executable target plus one library target for testable logic:
+Ofide's stack and layout, so code copies between the two apps:
 
 ```
-Package.swift
-Sources/Annotator/            # app: entry point, menu bar, overlay, panels
-Sources/AnnotatorCore/        # pure logic: geometry, AX snapshot model, payload, routing, server client
-Tests/AnnotatorCoreTests/
-Resources/Info.plist
-Resources/Annotator.entitlements
-scripts/bundle.sh             # builds the .app bundle and signs it
+src/                  # React views, one Vite entry; the window label picks the view
+  ui.tsx, ui.css      # copies of Ofide's components and tokens: keep them identical
+  components.tsx      # generic components that can move to Ofide
+  menu/ comment/ settings/ onboarding/ detail/
+src-tauri/            # Rust core: all state and I/O (server, queue, retry store,
+                      # projects, Conn, Ofide, hotkey, panels, windows)
+native/               # Swift helper `annotator-native`: Accessibility, overlay,
+                      # hit test, capture, DevTools DOM lookup (SwiftPM)
+scripts/              # build, sign, install, test, Conn headless server
+docs/port.md          # the contract between the three parts
 ```
 
-- Bundle id: `com.nckrtl.annotator`. App name: `Annotator`. `LSUIElement`
-  true (no Dock icon). Set `NSScreenCaptureUsageDescription` to a short
-  reason.
-- Keep accessibility reads in a small `AXReader` with a value type for the
-  snapshot, so the rest of the code never touches `AXUIElement`.
+- Rust and the helper talk in JSON lines (`docs/port.md` §1). React talks to
+  Rust with `invoke` commands and `state` events (§2).
+- The menu and comment panels are webviews in native `NSPanel`s
+  (`src-tauri/src/panels.rs`), so they open over full-screen apps and the
+  comment field can take Ofide's paste.
+- Windows use Ofide's shell: no title bar, a vibrant sidebar, the title on the
+  right, resizable.
+- The global hotkey uses Carbon `RegisterEventHotKey`; no `CGEventTap`.
+- Bundle id: `com.nckrtl.annotator`. `LSUIElement` true. Minimum macOS 15.
+  The helper is in `Contents/Resources/annotator-native` and runs under the
+  app's permission grants.
+- Keep `ui.tsx` and `ui.css` identical to Ofide's; put app styles in
+  `src/app.css`. Compare with
+  `diff ~/apps/ofide/mac/src/ui.tsx src/ui.tsx`.
 
 ## Build
 
 ```bash
-swift build -c release
-swift test
-scripts/bundle.sh          # writes build/Annotator.app and signs it
-open build/Annotator.app
+bun install
+scripts/test.sh            # swift test (native), cargo test, tsc, bun test
+scripts/install.sh         # builds, signs, installs /Applications/Annotator.app, starts it
 ```
 
-`scripts/bundle.sh` must:
-
-1. Run `swift build -c release`.
-2. Create `build/Annotator.app/Contents/{MacOS,Resources}`, copy the binary
-   and `Resources/Info.plist`, and set `CFBundleShortVersionString` from
-   `git describe --tags --always`.
-3. Sign with hardened runtime:
-   `codesign --force --options runtime --entitlements Resources/Annotator.entitlements --sign "$SIGNING_IDENTITY" build/Annotator.app`.
-   `SIGNING_IDENTITY` defaults to `Apple Development: Nick Retel (G9Y9TT23QF)`,
-   which is valid on this MacBook. The Mac mini has
-   `Nick Local Code Signing` instead. Fail loudly if the identity is missing
-   (`security find-identity -v -p codesigning`). Over SSH the login keychain
-   is locked (`errSecInternalComponent`); unlock it first or sign locally.
-4. Verify: `codesign --verify --deep --strict build/Annotator.app`.
+`scripts/build-app.sh` builds the helper (`scripts/build-native.sh`), runs
+`bun run tauri build`, and signs inside out (`scripts/sign-app.sh`): the
+helper, then the app, with the hardened runtime. The identity is in
+`scripts/signing.sh`: `Apple Development: Nick Retel (G9Y9TT23QF)`, or
+`SIGNING_IDENTITY`. The build fails if the identity is missing. Over SSH the
+login keychain is locked (`errSecInternalComponent`); unlock it first or sign
+locally.
 
 The app is not sandboxed: accessibility of other apps does not work in the
-sandbox. Entitlements stay minimal (no `com.apple.security.app-sandbox`).
+sandbox. Entitlements stay empty.
 
-Install for daily use by copying `build/Annotator.app` to `/Applications`.
-After a signing identity change, reset grants with
+macOS keeps the Accessibility and Screen Recording grants for this bundle id
+and certificate. After a signing identity change, reset them with
 `tccutil reset Accessibility com.nckrtl.annotator` and
 `tccutil reset ScreenCapture com.nckrtl.annotator`, then grant again.
 
+Logs: `~/Library/Logs/Annotator/annotator.log`. Settings:
+`~/Library/Application Support/com.nckrtl.annotator/settings.json`.
+
 ## Testing
 
-- Unit tests (`swift test`) for `AnnotatorCore`: AppKit to global
-  top-left coordinate conversion on multi-screen layouts (including a screen
-  left of or above the main one, and Retina scale), element path formatting,
-  payload encoding (matches the JSON above), screenshot size limiting, and the
-  server client's handling of 201/200/410/413/5xx.
-- Manual checks before you call phase 1 done, with a server running:
+- `scripts/test.sh` runs every suite:
+  - `swift test --package-path native`: coordinates on multi-screen layouts,
+    element labels, record encoding, screenshot size limits, DOM redaction.
+  - `cargo test` in `src-tauri`: server client (201/200/410/413/5xx), queue,
+    retry store, projects and prompt text, Conn, Ofide, panel placement,
+    URL and id checks.
+  - `bunx tsc -b` and `bun test scripts/`: hotkey, dictation state machine,
+    menu sections.
+- For layout work without the app, run `bun run dev` and open
+  `http://127.0.0.1:1430/preview.html?window=menu` (also `comment`,
+  `settings`, `onboarding`, `detail-<id>`). It mocks the Rust side.
+- Manual checks, with a server running:
   1. A native app (Finder, Mail or System Settings): hover shows tight
      highlights; a click posts a record with a real `ax.path`.
   2. An Electron app (Conn, Slack or VS Code): elements resolve after the

@@ -2,7 +2,8 @@
 //! `pending/` holds records that wait for a retry. `failed/` holds records the server refused,
 //! so the comment is never lost silently.
 
-use crate::annotations::{AnnotationClient, PostResult};
+use crate::annotations::{is_valid_id, AnnotationClient, PostResult};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -26,18 +27,37 @@ impl PendingStore {
         self.root.join("failed")
     }
 
+    /// Only ids in the server's grammar become file names. The folder is 0700, the file 0600.
     pub fn save(&self, id: &str, body: &[u8]) -> Result<(), String> {
-        crate::settings::write_atomic(&self.pending_directory().join(format!("{id}.json")), body)
+        if !is_valid_id(id) {
+            return Err(format!("Not an annotation id: {id}"));
+        }
+        let folder = self.pending_directory();
+        private_folder(&folder)?;
+        let file = folder.join(format!("{id}.json"));
+        let temporary = folder.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)
+            .and_then(|mut handle| std::io::Write::write_all(&mut handle, body))
+            .and_then(|()| std::fs::rename(&temporary, &file));
+        written.map_err(|e| {
+            let _ = std::fs::remove_file(&temporary);
+            format!("Could not write {}: {e}", file.display())
+        })
     }
 
     pub fn remove(&self, id: &str) {
-        let _ = std::fs::remove_file(self.pending_directory().join(format!("{id}.json")));
+        if is_valid_id(id) {
+            let _ = std::fs::remove_file(self.pending_directory().join(format!("{id}.json")));
+        }
     }
 
     /// Moves a refused record out of the retry queue.
     pub fn mark_failed(&self, id: &str) -> Result<(), String> {
+        if !is_valid_id(id) {
+            return Err(format!("Not an annotation id: {id}"));
+        }
         let folder = self.failed_directory();
-        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        private_folder(&folder)?;
         let target = folder.join(format!("{id}.json"));
         let _ = std::fs::remove_file(&target);
         std::fs::rename(self.pending_directory().join(format!("{id}.json")), target).map_err(|e| e.to_string())
@@ -48,9 +68,25 @@ impl PendingStore {
         records(&self.pending_directory())
     }
 
-    pub fn failed_count(&self) -> usize {
-        records(&self.failed_directory()).len()
+    pub fn pending_count(&self) -> usize {
+        file_count(&self.pending_directory())
     }
+
+    pub fn failed_count(&self) -> usize {
+        file_count(&self.failed_directory())
+    }
+}
+
+/// Creates the folder, and any missing parents, readable only by the user.
+fn private_folder(folder: &Path) -> Result<(), String> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(folder)
+        .map_err(|e| format!("Could not create {}: {e}", folder.display()))
+}
+
+/// Counts the records without reading them: each one holds a screenshot.
+fn file_count(folder: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(folder) else { return 0 };
+    entries.filter_map(Result::ok).filter(|entry| entry.path().extension().is_some_and(|e| e == "json")).count()
 }
 
 fn records(folder: &Path) -> Vec<(String, Vec<u8>)> {
@@ -144,7 +180,7 @@ impl Submitter {
     fn count_files(&self) {
         {
             let mut counts = self.counts.lock().unwrap();
-            counts.pending = self.store.pending().len();
+            counts.pending = self.store.pending_count();
             counts.failed = self.store.failed_count();
         }
         (self.on_change)();
@@ -168,8 +204,23 @@ mod tests {
         let mut ids: Vec<String> = store.pending().into_iter().map(|(id, _)| id).collect();
         ids.sort();
         assert_eq!(ids, ["a", "b"]);
+        let mode = |path: PathBuf| std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(path).unwrap().permissions()) & 0o777;
+        assert_eq!(mode(store.root.join("pending/a.json")), 0o600);
+        assert_eq!(mode(store.root.join("pending")), 0o700);
+        assert_eq!(store.pending_count(), 2);
         store.remove("a");
         assert_eq!(store.pending().into_iter().map(|(id, _)| id).collect::<Vec<_>>(), ["b"]);
+        store.remove("b");
+        assert_eq!(store.pending_count(), 0);
+    }
+
+    #[test]
+    fn rejects_ids_that_are_not_file_names() {
+        let store = store();
+        assert!(store.save("../secret", b"").is_err());
+        assert!(store.mark_failed("../secret").is_err());
+        assert_eq!(store.pending_count(), 0);
+        assert!(!store.root.join("secret.json").exists());
     }
 
     #[test]
@@ -179,6 +230,8 @@ mod tests {
         store.mark_failed("a").unwrap();
         assert!(store.pending().is_empty());
         assert_eq!(store.failed_count(), 1);
+        let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(store.failed_directory()).unwrap().permissions());
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[tokio::test]

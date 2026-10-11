@@ -14,12 +14,26 @@ const ofideApps: [OfideApp, string, string][] = [
 const ofideDefault = (app: OfideApp) => ofideApps.find(([id]) => id === app)?.[2] ?? ofideApps[0][2];
 const efforts: [string, string][] = [["low", "Low"], ["medium", "Medium"], ["high", "High"], ["max", "Max"]];
 
-/** Settings.validURL: an http(s) URL with a host. */
+const loopbackHosts = ["localhost", "127.0.0.1", "[::1]"];
+
+/** ServiceURL.parse: an http(s) URL with a host and no user name, query, or fragment.
+ *  Plain http only on localhost, 127.0.0.1 and ::1. */
 export function validURL(text: string): URL | null {
   try {
     const url = new URL(text.trim());
-    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname ? url : null;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (!url.hostname || url.username || url.password) return null;
+    // An empty `?` or `#` leaves search and hash empty, but stays in href.
+    if (url.search || url.hash || url.href.includes("?") || url.href.includes("#")) return null;
+    if (url.protocol === "http:" && !loopbackHosts.includes(url.hostname)) return null;
+    return url;
   } catch { return null; }
+}
+
+/** ServiceURL.loopback: validURL on this machine. Ofide's token never leaves the Mac. */
+export function loopbackURL(text: string): URL | null {
+  const url = validURL(text);
+  return url && loopbackHosts.includes(url.hostname) ? url : null;
 }
 
 /** T3ModelSelection: `provider/model`, both parts non-empty. */
@@ -71,7 +85,7 @@ function GeneralForm({ initial, state, onSaved }: { initial: Settings; state: Re
   function apply() {
     const patch: Partial<Settings> = {};
     if (validURL(serverDraft) && serverDraft !== latest.current.serverURL) patch.serverURL = serverDraft;
-    if (validURL(ofideDraft) && ofideDraft !== latest.current.ofideURL) patch.ofideURL = ofideDraft;
+    if (loopbackURL(ofideDraft) && ofideDraft !== latest.current.ofideURL) patch.ofideURL = ofideDraft;
     if (Object.keys(patch).length) update(patch);
   }
 
@@ -110,7 +124,7 @@ function GeneralForm({ initial, state, onSaved }: { initial: Settings; state: Re
       </div>}
       <label className="block field">URL
         <input aria-label="Server URL" value={serverDraft} placeholder={defaultServerURL} onChange={event => setServerDraft(event.target.value)}/>
-        {!validURL(serverDraft) && <span className="error-text">Enter an http or https URL.</span>}
+        {!validURL(serverDraft) && <span className="error-text">Use https, or http on 127.0.0.1 or localhost. No user name, query, or fragment.</span>}
       </label>
     </Group>
 
@@ -134,7 +148,7 @@ function GeneralForm({ initial, state, onSaved }: { initial: Settings; state: Re
       </Row>
       <label className="block field">URL
         <input aria-label="Ofide URL" value={ofideDraft} placeholder={ofideDefault(settings.ofideApp)} disabled={!settings.ofideEnabled} onChange={event => setOfideDraft(event.target.value)}/>
-        {settings.ofideEnabled && !validURL(ofideDraft) && <span className="error-text">Enter an http or https URL.</span>}
+        {settings.ofideEnabled && !loopbackURL(ofideDraft) && <span className="error-text">Use http or https on 127.0.0.1 or localhost, with no user name, query, or fragment.</span>}
       </label>
     </Group>
 

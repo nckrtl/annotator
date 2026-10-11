@@ -16,9 +16,10 @@ final class AXReader: @unchecked Sendable {
 
     /// The element under `point` (global top-left points), or the window when no element has a usable frame.
     /// Nil when no app window is under the point.
-    func target(at point: CGPoint) async -> Target? {
+    /// `text` walks children for a name. Hover leaves it off so a slow tree cannot stall the highlight.
+    func target(at point: CGPoint, text: Bool = true) async -> Target? {
         await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: self.readTarget(at: point)) }
+            queue.async { continuation.resume(returning: self.readTarget(at: point, text: text)) }
         }
     }
 
@@ -89,7 +90,7 @@ final class AXReader: @unchecked Sendable {
 
     // MARK: - Elements
 
-    private func readTarget(at point: CGPoint) -> Target? {
+    private func readTarget(at point: CGPoint, text: Bool) -> Target? {
         guard var found = topWindow(at: point) else { return nil }
         let appElement = AXUIElementCreateApplication(found.app.pid)
         enableElectronAccessibility(appElement, pid: found.app.pid, bundleURL: found.bundleURL)
@@ -112,8 +113,8 @@ final class AXReader: @unchecked Sendable {
         }
         chain.reverse()
         var path = chain.map(info)
-        // A plain web <div> has no name. Describe it by the text inside it.
-        if var element = path.last, element.name == nil {
+        // A plain web <div> has no name. Describe it by the text inside it. Hover skips this walk.
+        if text, var element = path.last, element.name == nil {
             element.text = innerText(of: hit).map { AXElementInfo.truncate($0, to: 120) }
             path[path.count - 1] = element
         }
@@ -155,14 +156,18 @@ final class AXReader: @unchecked Sendable {
     }
 
     private func info(_ element: AXUIElement) -> AXElementInfo {
-        AXElementInfo(
-            role: attribute(element, kAXRoleAttribute),
-            subrole: attribute(element, kAXSubroleAttribute),
+        let role: String? = attribute(element, kAXRoleAttribute)
+        let subrole: String? = attribute(element, kAXSubroleAttribute)
+        // Do not copy the value out of a secure field. The attribute often holds the secret.
+        let secure = role == "AXSecureTextField" || subrole == "AXSecureTextField"
+        return AXElementInfo(
+            role: role,
+            subrole: subrole,
             roleDescription: attribute(element, kAXRoleDescriptionAttribute),
             title: attribute(element, kAXTitleAttribute),
             description: attribute(element, kAXDescriptionAttribute),
             identifier: attribute(element, kAXIdentifierAttribute),
-            value: stringValue(element),
+            value: secure ? nil : stringValue(element),
             help: attribute(element, kAXHelpAttribute),
             domId: attribute(element, "AXDOMIdentifier"),
             domClasses: attribute(element, "AXDOMClassList") ?? [])

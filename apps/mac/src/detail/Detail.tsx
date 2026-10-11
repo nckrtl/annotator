@@ -45,8 +45,11 @@ export default function Detail({ id }: { id: string }) {
   const [items, setItems] = useState<QueueItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState(false);
+  // The live queue does not keep screenshots. Read this one once.
+  const [screenshot, setScreenshot] = useState<string | null>(null);
   useEvents({ queue: (payload: QueueItem[]) => { setItems(payload); setError(null); } });
   useEffect(() => { void invoke<QueueItem[]>("get_queue").then(setItems).catch(failure => setError(errorText(failure))); }, []);
+  useEffect(() => { void invoke<string | null>("get_screenshot", { id }).then(setScreenshot).catch(() => setScreenshot(null)); }, [id]);
   const item = items?.find(entry => entry.id === id);
   if (!items) return <main className="detail-window"><p className="detail-missing">{error ?? ""}</p></main>;
   if (!item) return <main className="detail-window"><p className="detail-missing">This annotation is no longer on the server.</p></main>;
@@ -58,13 +61,13 @@ export default function Detail({ id }: { id: string }) {
       </span>
     </header>
     <div className="detail-body scroll">
-      {item.screenshot ? <Preview src={item.screenshot} open={() => setLightbox(true)}/> : <p className="detail-muted">No screenshot.</p>}
+      {screenshot ? <Preview src={screenshot} open={() => setLightbox(true)}/> : <p className="detail-muted">No screenshot.</p>}
       <dl className="properties">{properties(item).map(row => <div key={row.label} className="property">
         <dt>{row.label}</dt>
         <dd className={row.wraps ? "wraps" : "line"} title={row.wraps ? undefined : row.value ?? ""}>{row.value}</dd>
       </div>)}</dl>
     </div>
-    {lightbox && item.screenshot && <Lightbox src={item.screenshot} close={() => setLightbox(false)}/>}
+    {lightbox && screenshot && <Lightbox src={screenshot} close={() => setLightbox(false)}/>}
   </main>;
 }
 

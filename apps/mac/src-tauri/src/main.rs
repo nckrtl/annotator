@@ -6,12 +6,14 @@ mod conn;
 mod geometry;
 mod helper;
 mod hotkey;
+mod http;
 mod local_server;
 mod ofide;
 mod panels;
 mod pending;
 mod projects;
 mod queue;
+mod service_url;
 mod settings;
 #[cfg(test)]
 mod testutil;
@@ -74,6 +76,7 @@ fn main() {
             commands::relaunch,
             commands::get_permissions,
             commands::get_queue,
+            commands::get_screenshot,
             commands::delete_annotation,
             commands::helper,
             commands::log_message,

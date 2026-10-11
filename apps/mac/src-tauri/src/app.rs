@@ -60,6 +60,8 @@ pub struct Core {
     /// Open the Screen Recording pane when the next answer still lacks the permission.
     pub screen_pane_pending: bool,
     pub tray_active: Option<bool>,
+    /// The queue connection last used to decide whether to ask the local server if it runs.
+    pub server_watch: Option<Connection>,
 }
 
 pub struct Shared {
@@ -120,6 +122,7 @@ pub fn setup(app: &tauri::AppHandle) {
             helper_error: None,
             screen_pane_pending: false,
             tray_active: None,
+            server_watch: None,
         }),
         queue,
         submitter,
@@ -200,8 +203,8 @@ pub fn app_state(app: &tauri::AppHandle) -> Value {
     }));
     let queue = summary.map(|s| json!({
         "todo": s.todo, "inProgress": s.in_progress, "done": s.done,
-        "open": s.open.iter().map(without_screenshot).collect::<Vec<_>>(),
-        "finished": s.finished.iter().map(without_screenshot).collect::<Vec<_>>(),
+        "open": s.open,
+        "finished": s.finished,
     }));
     let projects = &core.projects.routes.projects;
     json!({
@@ -265,7 +268,16 @@ fn queue_changed(app: &tauri::AppHandle) {
             matches!(target, tauri::EventTarget::WebviewWindow { label } if label.starts_with("detail-"))
         });
     }
-    refresh_server_status(app, false);
+    // Ask the local server only when the connection changes, not on every queue event.
+    let connection = shared(app).queue.connection();
+    let changed = with(app, |core| {
+        let changed = core.server_watch.as_ref() != Some(&connection);
+        core.server_watch = Some(connection.clone());
+        changed
+    });
+    if changed && !matches!(connection, Connection::Connecting | Connection::InvalidUrl) {
+        refresh_server_status(app, false);
+    }
     if let Some(summary) = shared(app).queue.summary() {
         let projects = with(app, |core| core.projects.routes.projects.clone());
         shared(app).conn.remember(summary.open.clone(), projects.clone());
@@ -726,7 +738,8 @@ pub async fn clear_open(app: &tauri::AppHandle) -> usize {
 }
 
 pub fn open_annotation(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
-    if !windows::valid_id(id) {
+    // Window labels allow only a-z, A-Z, 0-9, `-`, `/`, `:` and `_`; server ids are a subset.
+    if !crate::annotations::is_valid_id(id) {
         return Err(format!("Not an annotation id: {id}"));
     }
     let number = shared(app).queue.summary().and_then(|s| s.item(id).and_then(|i| i.number()));

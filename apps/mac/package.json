@@ -8,7 +8,6 @@
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "native:build": "bash scripts/build-native.sh",
-    "app": "bash scripts/dev.sh",
     "app:build": "bash scripts/build-app.sh",
     "app:install": "bash scripts/install.sh",
     "test": "bash scripts/test.sh",

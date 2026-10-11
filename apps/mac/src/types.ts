@@ -8,7 +8,7 @@ export type QueueItem = {
   id: string; number?: number; status: string; comment: string; createdAt?: number;
   claimedAt?: number; completedAt?: number; summary?: string; question?: boolean; element?: string;
   elementPath?: string; url?: string; pathname?: string; boundingBox?: Box; screenSize?: string;
-  screenshot?: string; component?: string; react?: string; native?: any; agent?: string;
+  screenshot?: string | null; component?: string; react?: string; native?: any; agent?: string;
 };
 
 export type LocalServer = { busy: boolean; running: boolean; error?: string; hasLog: boolean };

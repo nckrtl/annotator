@@ -10,11 +10,17 @@ pub struct Reply {
     pub status: u16,
     pub body: String,
     pub delay: Duration,
+    pub headers: Vec<(String, String)>,
 }
 
 impl Reply {
     pub fn new(status: u16, body: &str) -> Reply {
-        Reply { status, body: body.into(), delay: Duration::ZERO }
+        Reply { status, body: body.into(), delay: Duration::ZERO, headers: Vec::new() }
+    }
+
+    pub fn header(mut self, name: &str, value: &str) -> Reply {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 
     pub fn delayed(mut self, ms: u64) -> Reply {
@@ -94,8 +100,9 @@ pub fn serve(replies: Vec<Reply>) -> Server {
                 let _ = reader.read_exact(&mut body);
                 recorded.lock().unwrap().push(Request { method, path, headers, body });
                 std::thread::sleep(reply.delay);
+                let extra: String = reply.headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
                 let response = format!(
-                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{}",
                     reply.status, reply.body.len(), reply.body);
                 let _ = stream.write_all(response.as_bytes());
             });

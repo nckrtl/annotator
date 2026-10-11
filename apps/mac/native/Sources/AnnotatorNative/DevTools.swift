@@ -13,7 +13,8 @@ actor DevTools {
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 1
-        return URLSession(configuration: configuration)
+        configuration.timeoutIntervalForResource = 1
+        return URLSession(configuration: configuration, delegate: RedirectStay(), delegateQueue: nil)
     }()
 
     /// `target` with its DOM element and exact frame, when the app has a DevTools port and one page matches.
@@ -22,11 +23,13 @@ actor DevTools {
         guard target.mode != .region, let area = target.webArea, area.contains(point),
             let port = await port(for: target.app.pid),
             let page = await page(pid: target.app.pid, port: port, url: target.webUrl, title: target.window.title),
-            let socket = page.webSocketDebuggerUrl.flatMap(URL.init(string:))
+            let socket = page.webSocketDebuggerUrl.flatMap({ DebuggerEndpoint.socket(from: $0, port: port) })
         else { return target }
 
         let expression = DOMInfo.probe(x: point.x - area.minX, y: point.y - area.minY, scale: scale)
-        guard let json = await evaluate(expression, on: socket), let dom = try? DOMInfo.decode(json) else { return target }
+        guard let socketURL = DebuggerEndpoint.socket(from: socket.absoluteString, port: port),
+            let json = await evaluate(expression, on: socketURL), let dom = try? DOMInfo.decode(json)
+        else { return target }
         var result = target
         result.dom = dom
         result.mode = .element
@@ -39,17 +42,15 @@ actor DevTools {
 
     private func port(for pid: pid_t) async -> UInt16? {
         if let cached = ports[pid] {
-            // A found port stays valid until a request to it fails; a missing one is checked again after 5 s.
-            if cached.port != nil || Date().timeIntervalSince(cached.checked) < 5 { return cached.port }
+            // A found port stays valid until a request to it fails; a missing one is checked again after 30 s.
+            if cached.port != nil || Date().timeIntervalSince(cached.checked) < 30 { return cached.port }
         }
-        var found: UInt16?
-        for port in DevTools.listeningPorts(pid: pid) where await isDevTools(port) {
-            found = port
-            break
-        }
-        ports[pid] = (found, Date())
-        if found != nil { log.info("DevTools port \(found ?? 0) for pid \(pid)") }
-        return found
+        // Only a port the process itself advertised. Do not connect to its other listeners.
+        let found = DevToolsLaunch.port(in: DevTools.processArguments(pid: pid))
+        let port: UInt16? = if let found, await isDevTools(found) { found } else { nil }
+        ports[pid] = (port, Date())
+        if port != nil { log.info("DevTools port \(port ?? 0) for pid \(pid)") }
+        return port
     }
 
     /// Only a DevTools endpoint answers `/json/version` with a browser debugger URL.
@@ -62,26 +63,25 @@ actor DevTools {
         return body["webSocketDebuggerUrl"] is String
     }
 
-    /// TCP ports the process listens on, read from the kernel's file descriptor table.
-    static func listeningPorts(pid: pid_t) -> [UInt16] {
-        let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard size > 0 else { return [] }
-        let stride = MemoryLayout<proc_fdinfo>.stride
-        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / stride)
-        let used = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, size) }
-        var ports: [UInt16] = []
-        for fd in fds.prefix(Int(used) / stride) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
-            var info = socket_fdinfo()
-            let length = Int32(MemoryLayout<socket_fdinfo>.size)
-            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &info, length) == length,
-                info.psi.soi_kind == SOCKINFO_TCP
-            else { continue }
-            let tcp = info.psi.soi_proto.pri_tcp
-            guard tcp.tcpsi_state == TSI_S_LISTEN else { continue }
-            let port = UInt16(bigEndian: UInt16(truncatingIfNeeded: tcp.tcpsi_ini.insi_lport))
-            if !ports.contains(port) { ports.append(port) }
+    /// A process's arguments, read with `KERN_PROCARGS2`: argc, the executable path, then argv.
+    static func processArguments(pid: pid_t) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [] }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+        let argc = Int(buffer.withUnsafeBytes { $0.load(as: Int32.self) })
+        var index = 4
+        while index < size, buffer[index] != 0 { index += 1 }  // The executable path.
+        while index < size, buffer[index] == 0 { index += 1 }  // Padding.
+        var arguments: [String] = []
+        while arguments.count < argc, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
         }
-        return ports
+        return arguments
     }
 
     // MARK: - Pages
@@ -137,12 +137,33 @@ actor DevTools {
     private static func roundTrip(_ socket: URLSessionWebSocketTask, _ message: String) async throws -> String? {
         try await socket.send(.string(message))
         while true {
-            guard case .string(let reply) = try await socket.receive(),
+            guard case .string(let reply) = try await socket.receive(), reply.utf8.count <= 65_536,
                 let body = try JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: Any],
                 body["id"] as? Int == 1
             else { continue }
             let result = (body["result"] as? [String: Any])?["result"] as? [String: Any]
             return result?["value"] as? String
         }
+    }
+}
+
+/// Refuses a redirect that changes scheme, host, or port, so a request cannot follow it off the DevTools port.
+private final class RedirectStay: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let from = task.originalRequest?.url, let to = request.url,
+            from.scheme?.lowercased() == to.scheme?.lowercased(),
+            from.host?.lowercased() == to.host?.lowercased(),
+            from.port == to.port
+        else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }

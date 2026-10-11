@@ -3,7 +3,7 @@
 //! Conn's HTTP API is internal, so every request reports a clear error when its shape changes.
 
 use crate::projects::Project;
-use crate::settings::{expand_tilde, valid_url, Settings};
+use crate::settings::{expand_tilde, Settings};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -228,8 +228,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(origin: url::Url, token: String) -> Client {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().expect("HTTP client");
-        Client { origin, token, http }
+        Client { origin, token, http: crate::http::short() }
     }
 
     fn url(&self, path: &str) -> url::Url {
@@ -472,7 +471,7 @@ impl Conn {
 
     /// The client for the configured endpoint, with its token from the Keychain.
     pub fn authorized_client(settings: &Settings) -> Result<Client, ConnError> {
-        let origin = valid_url(&settings.t3_endpoint)
+        let origin = crate::service_url::parse(&settings.t3_endpoint)
             .ok_or_else(|| ConnError::Unexpected("Enter your Conn server endpoint in Settings.".into()))?;
         if let Some(token) = keychain::read(&settings.t3_endpoint)? {
             return Ok(Client::new(origin, token));
@@ -618,6 +617,10 @@ impl Conn {
                 return None;
             }
             projects.iter().filter_map(|project| {
+                // A full-access thread runs tools without asking. Do not feed it new work on its own.
+                if project.t3_runtime_mode == "full-access" {
+                    return None;
+                }
                 let session = Conn::session_in(&inner.sessions, project, settings)?;
                 let since = session.started_unix_ms();
                 let fresh: Vec<Value> = open.iter().filter(|item| {
@@ -693,8 +696,16 @@ async fn run_cli(runtime: &Runtime, arguments: &[&str]) -> Result<String, ConnEr
         return Err(ConnError::NotRunning(format!(
             "Could not find Conn's command-line tool from its running server (pid {}). Is the Conn server running?", runtime.pid)));
     };
+    if !app_bundle_installed(executable, script) {
+        return Err(ConnError::Unexpected("The Conn command-line tool must be inside an app in /Applications.".into()));
+    }
+    // The server's environment can hold tokens. Pass only what the CLI needs.
     let output = tokio::process::Command::new(executable).arg(script).args(arguments)
-        .env("ELECTRON_RUN_AS_NODE", "1").stdin(std::process::Stdio::null()).output().await
+        .env_clear()
+        .env("ELECTRON_RUN_AS_NODE", "1")
+        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", crate::settings::home())
+        .stdin(std::process::Stdio::null()).output().await
         .map_err(|e| ConnError::Rejected(format!("Conn's CLI failed: {e}")))?;
     if !output.status.success() {
         let errors = String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(300)]).into_owned();
@@ -703,13 +714,48 @@ async fn run_cli(runtime: &Runtime, arguments: &[&str]) -> Result<String, ConnEr
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Whether a Conn CLI binary and its script live in the same app under `/Applications`, after
+/// symlinks are resolved (AppBundleTrust).
+pub fn app_bundle_installed(executable: &str, script: &str) -> bool {
+    let executable = resolved(executable);
+    let script = resolved(script);
+    let Some(app) = application_containing(&executable) else { return false };
+    script.to_string_lossy().ends_with("bin.mjs") && app.starts_with("/Applications") && script.starts_with(&app)
+}
+
+/// The path with symlinks resolved; a missing path is only cleaned up (`.` and `..` removed).
+fn resolved(path: &str) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| standardized(Path::new(path)))
+}
+
+fn standardized(path: &Path) -> PathBuf {
+    let mut clean = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                clean.pop();
+            }
+            other => clean.push(other),
+        }
+    }
+    clean
+}
+
+/// The innermost `.app` folder that holds `path`.
+pub fn application_containing(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf)
+}
+
 /// Validates an endpoint like SettingsView: an http(s) origin without a path. Returns it without
-/// a trailing slash.
-pub fn endpoint(text: &str) -> Option<String> {
-    let url = valid_url(text)?;
-    let plain = url.username().is_empty() && url.password().is_none() && url.query().is_none()
-        && url.fragment().is_none() && (url.path().is_empty() || url.path() == "/");
-    plain.then(|| url.as_str().trim_end_matches('/').to_string())
+/// a trailing slash, or the message to show.
+pub fn endpoint(text: &str) -> Result<String, String> {
+    let url = crate::service_url::parse(text)
+        .ok_or("Use https, or http on 127.0.0.1 or localhost. No user name, query, or fragment.")?;
+    if !(url.path().is_empty() || url.path() == "/") {
+        return Err("Enter a server origin without a path.".into());
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
 #[cfg(test)]
@@ -818,11 +864,49 @@ mod tests {
 
     #[test]
     fn endpoints() {
-        assert_eq!(endpoint("http://127.0.0.1:3780/").as_deref(), Some("http://127.0.0.1:3780"));
-        assert_eq!(endpoint("https://conn.example.com").as_deref(), Some("https://conn.example.com"));
-        assert_eq!(endpoint("http://127.0.0.1:3780/api"), None);
-        assert_eq!(endpoint("http://a@127.0.0.1:3780"), None);
-        assert_eq!(endpoint("127.0.0.1:3780"), None);
+        let invalid = Err("Use https, or http on 127.0.0.1 or localhost. No user name, query, or fragment.".to_string());
+        assert_eq!(endpoint("http://127.0.0.1:3780/"), Ok("http://127.0.0.1:3780".into()));
+        assert_eq!(endpoint("https://conn.example.com"), Ok("https://conn.example.com".into()));
+        assert_eq!(endpoint("http://127.0.0.1:3780/api"), Err("Enter a server origin without a path.".into()));
+        assert_eq!(endpoint("http://a@127.0.0.1:3780"), invalid);
+        assert_eq!(endpoint("http://conn.example.com"), invalid);
+        assert_eq!(endpoint("http://127.0.0.1:3780?x"), invalid);
+        assert_eq!(endpoint("127.0.0.1:3780"), invalid);
+    }
+
+    #[test]
+    fn pairing_binary_must_live_in_applications() {
+        let script = "/Applications/AnnotatorTrustTest.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs";
+        assert!(app_bundle_installed("/Applications/AnnotatorTrustTest.app/Contents/MacOS/Conn", script));
+        assert!(!app_bundle_installed("/Applications/AnnotatorTrustTest.app/Contents/MacOS/Conn", "/tmp/bin.mjs"));
+        assert!(!app_bundle_installed("/Users/me/Conn.app/Contents/MacOS/Conn", "/Users/me/Conn.app/Contents/Resources/bin.mjs"));
+        assert!(!app_bundle_installed("/Applications/AnnotatorTrustTest.app/Contents/MacOS/Conn",
+            "/Applications/AnnotatorTrustTest.app/../../tmp/bin.mjs"));
+        assert!(!app_bundle_installed("/Applications/AnnotatorTrustTest.app/../../Users/me/X.app/Contents/MacOS/Conn",
+            "/Users/me/X.app/bin.mjs"));
+        assert_eq!(application_containing(Path::new("/Applications/AnnotatorTrustTest.app/Contents/MacOS/Conn")).as_deref(),
+            Some(Path::new("/Applications/AnnotatorTrustTest.app")));
+        // Symlinks are resolved: a link in /Applications to an app elsewhere is not trusted.
+        let folder = crate::testutil::temp_dir("conn-trust");
+        std::fs::create_dir_all(folder.join("Fake.app/Contents/MacOS")).unwrap();
+        std::fs::write(folder.join("Fake.app/Contents/MacOS/Conn"), "").unwrap();
+        std::fs::write(folder.join("Fake.app/bin.mjs"), "").unwrap();
+        assert!(!app_bundle_installed(&folder.join("Fake.app/Contents/MacOS/Conn").to_string_lossy(),
+            &folder.join("Fake.app/bin.mjs").to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[tokio::test]
+    async fn nudge_skips_full_access_projects() {
+        let file = crate::testutil::temp_dir("conn").join("sessions.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, r#"{"p":{"threadId":"t","started":1,"server":"http://127.0.0.1:1"}}"#).unwrap();
+        let conn = Conn::new(file);
+        let settings = Settings { t3_endpoint: "http://127.0.0.1:1".into(), t3_nudge: true, ..Settings::default() };
+        let project = Project { id: "p".into(), t3_runtime_mode: "full-access".into(), ..Project::new("P") };
+        let open = [json!({"id": "a", "status": "todo", "number": 1, "createdAt": i64::MAX,
+            "native": {"project": "P"}})];
+        assert!(conn.nudge(&settings, &open, &[project]).await.is_none());
     }
 
     #[test]

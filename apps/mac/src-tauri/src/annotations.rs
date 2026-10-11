@@ -3,7 +3,6 @@
 //! may add fields this app does not know.
 
 use serde_json::Value;
-use std::time::Duration;
 
 /// The outcome of posting one annotation.
 #[derive(Debug, Clone, PartialEq)]
@@ -164,8 +163,7 @@ pub struct AnnotationClient {
 
 impl AnnotationClient {
     pub fn new(base: url::Url) -> AnnotationClient {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().expect("HTTP client");
-        AnnotationClient { base, http }
+        AnnotationClient { base, http: crate::http::short() }
     }
 
     fn appending(&self, segment: &str) -> url::Url {
@@ -202,8 +200,12 @@ impl AnnotationClient {
         }
     }
 
-    /// Deletes one record. True when the server removed it or never had it.
+    /// Deletes one record. True when the server removed it or never had it. Ids that are not the
+    /// server's grammar are refused here, so `../` cannot leave `/annotations`.
     pub async fn delete(&self, id: &str) -> bool {
+        if !is_valid_id(id) {
+            return false;
+        }
         match self.http.delete(self.appending(id)).send().await {
             Ok(response) => matches!(response.status().as_u16(), 200 | 404),
             Err(_) => false,
@@ -219,9 +221,101 @@ impl AnnotationClient {
             return Err(QueueError::BadStatus(status));
         }
         let data = response.bytes().await.map_err(|error| QueueError::Unreachable(describe(&error)))?;
-        let items = parse_queue(&data).ok_or(QueueError::NotAnnotationServer)?;
+        // Screenshots dominate the payload. The menu never draws them, so the live queue does not keep them.
+        let slim = nullify_strings(&["screenshot"], &data);
+        let items = parse_queue(&slim).ok_or(QueueError::NotAnnotationServer)?;
         Ok((QueueSummary::new(&items), items))
     }
+
+    /// The screenshot for one record. The live queue does not keep these.
+    pub async fn screenshot(&self, id: &str) -> Option<String> {
+        if !is_valid_id(id) {
+            return None;
+        }
+        let response = self.http.get(self.base.clone()).send().await.ok()?;
+        if response.status().as_u16() != 200 {
+            return None;
+        }
+        let body: Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
+        if body["meta"]["service"].as_str() != Some("@nckrtl/annotator") {
+            return None;
+        }
+        body["data"].as_array()?.iter().find(|item| item["id"].as_str() == Some(id))?["screenshot"]
+            .as_str().map(String::from)
+    }
+}
+
+/// A record without its screenshot, to keep in memory.
+pub fn without_screenshot(item: &Value) -> Value {
+    let mut item = item.clone();
+    if let Some(object) = item.as_object_mut() {
+        object.remove("screenshot");
+    }
+    item
+}
+
+/// Server ids: `^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$`.
+pub fn is_valid_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    (1..=200).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+}
+
+/// Replaces the string values of `keys` with JSON `null`, without decoding those strings
+/// (JSONRedactor.swift). A matching key whose value is not a string is left as it is.
+pub fn nullify_strings(keys: &[&str], data: &[u8]) -> Vec<u8> {
+    const QUOTE: u8 = b'"';
+    let space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r');
+    // The raw bytes inside a JSON string that starts at `open`, and the index just after its closing quote.
+    let string = |open: usize| -> Option<(&[u8], usize)> {
+        let mut index = open + 1;
+        let mut escaped = false;
+        while index < data.len() {
+            let byte = data[index];
+            index += 1;
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == QUOTE {
+                return Some((&data[open + 1..index - 1], index));
+            }
+        }
+        None
+    };
+    let mut output = Vec::with_capacity(data.len().min(256 * 1024));
+    let (mut index, mut mark) = (0, 0);
+    while index < data.len() {
+        if data[index] != QUOTE {
+            index += 1;
+            continue;
+        }
+        let Some((literal, next)) = string(index) else {
+            index += 1;
+            continue;
+        };
+        let mut look = next;
+        while look < data.len() && space(data[look]) { look += 1; }
+        if look >= data.len() || data[look] != b':' || !keys.iter().any(|key| key.as_bytes() == literal) {
+            index = next;
+            continue;
+        }
+        let mut value = look + 1;
+        while value < data.len() && space(data[value]) { value += 1; }
+        let Some((_, after)) = (value < data.len() && data[value] == QUOTE).then(|| string(value)).flatten() else {
+            index = next;
+            continue;
+        };
+        output.extend_from_slice(&data[mark..index]);
+        output.push(QUOTE);
+        output.extend_from_slice(literal);
+        output.extend_from_slice(b"\":null");
+        index = after;
+        mark = after;
+    }
+    output.extend_from_slice(&data[mark..]);
+    output
 }
 
 /// The records of a `GET <base>` body, or None when the body is not from an annotation server.
@@ -234,15 +328,6 @@ pub fn parse_queue(data: &[u8]) -> Option<Vec<Value>> {
     let items = body["data"].as_array()?.clone();
     let valid = items.iter().all(|item| ["id", "status", "comment"].iter().all(|key| item[key].is_string()));
     valid.then_some(items)
-}
-
-/// A record without its screenshot, for the menu.
-pub fn without_screenshot(item: &Value) -> Value {
-    let mut item = item.clone();
-    if let Some(object) = item.as_object_mut() {
-        object.remove("screenshot");
-    }
-    item
 }
 
 #[cfg(test)]
@@ -366,6 +451,52 @@ mod tests {
         let client = AnnotationClient::new(server.url("/annotations"));
         assert_eq!(client.queue().await.unwrap_err(), QueueError::NotAnnotationServer);
         assert_eq!(client.queue().await.unwrap_err(), QueueError::BadStatus(503));
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_path_ids() {
+        let server = serve(vec![Reply::new(200, "")]);
+        let client = AnnotationClient::new(server.url("/annotations"));
+        assert!(!client.delete("../secret").await);
+        assert!(!client.delete("foo/bar").await);
+        assert!(server.paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn queue_drops_screenshots() {
+        let body = r#"{"data":[{"id":"a","number":1,"status":"todo","comment":"x","screenshot":"data:image/jpeg;base64,AAAA"}],
+         "meta":{"service":"@nckrtl/annotator"}}"#;
+        let server = serve(vec![Reply::new(200, body)]);
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (summary, items) = client.queue().await.unwrap();
+        assert!(summary.item("a").unwrap()["screenshot"].is_null());
+        assert!(items[0]["screenshot"].is_null());
+        assert_eq!(client.screenshot("a").await.as_deref(), Some("data:image/jpeg;base64,AAAA"));
+        assert_eq!(client.screenshot("b").await, None);
+        assert_eq!(client.screenshot("../secret").await, None);
+    }
+
+    #[test]
+    fn ids_match_the_server_grammar() {
+        assert!(is_valid_id("abc-1"));
+        assert!(is_valid_id("a"));
+        assert!(is_valid_id(&"a".repeat(200)));
+        assert!(!is_valid_id(&"a".repeat(201)));
+        assert!(!is_valid_id("../secret"));
+        assert!(!is_valid_id("foo/bar"));
+        assert!(!is_valid_id(""));
+        assert!(!is_valid_id("-abc"));
+        assert!(!is_valid_id("é"));
+    }
+
+    #[test]
+    fn redactor_nulls_screenshot_strings_only() {
+        let input = br#"{"note":"see \"screenshot\"","screenshot":"HUGE","count":1,"nested":{"screenshot" : "also"}}"#;
+        let output = nullify_strings(&["screenshot"], input);
+        assert_eq!(String::from_utf8(output).unwrap(),
+            r#"{"note":"see \"screenshot\"","screenshot":null,"count":1,"nested":{"screenshot":null}}"#);
+        let number = br#"{"screenshot":1}"#;
+        assert_eq!(nullify_strings(&["screenshot"], number), number);
     }
 
     #[test]

@@ -74,10 +74,9 @@ impl Answer {
 }
 
 impl OfideClient {
-    /// `/dictate-stop` waits for transcription and paste, up to 120 seconds.
+    /// `/dictate-stop` waits for transcription and paste, up to 120 seconds: the long shared client.
     pub fn new(base: url::Url, token: String) -> OfideClient {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(125)).build().expect("HTTP client");
-        OfideClient { base, token, http }
+        OfideClient { base, token, http: crate::http::long() }
     }
 
     fn url(&self, path: &str) -> url::Url {

@@ -182,6 +182,17 @@ public struct Annotation: Codable, Sendable, Equatable {
         )
     }
 
+    /// Server ids: `^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$`.
+    public static func isValidID(_ id: String) -> Bool {
+        guard (1...200).contains(id.count) else { return false }
+        let scalars = id.unicodeScalars
+        guard let first = scalars.first, Annotation.idHead.contains(first) else { return false }
+        return scalars.dropFirst().allSatisfy { Annotation.idTail.contains($0) }
+    }
+
+    private static let idHead = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    private static let idTail = idHead.union(CharacterSet(charactersIn: "_-"))
+
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]

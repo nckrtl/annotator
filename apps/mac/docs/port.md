@@ -1,6 +1,6 @@
 # Port to Tauri: the contract between the three parts
 
-The Swift app (`Sources/`, `Tests/`) is the reference. Every feature it has must exist in the port,
+The Swift app (`Sources/`, `Tests/`, removed after the port; see commit 9cf7134 and the review fixes in b10914f) was the reference. Every feature it has must exist in the port,
 with the same behavior and the same texts (Simplified Technical English: short, active, plain).
 Read the Swift file named in each section before you write its replacement. When this document
 and the Swift app disagree on behavior, the Swift app wins; when they disagree on the interface
@@ -128,7 +128,7 @@ Keychain; returns the message), `conn_token_saved {endpoint}` → bool, `get_pro
 Onboarding: `request_permission {kind: "accessibility"|"screenRecording"}`,
 `open_privacy {kind}` (opens the Settings pane), `relaunch`.
 
-Detail: `get_queue` → `QueueItem[]`, `delete_annotation {id}`.
+Detail: `get_queue` → `QueueItem[]` (screenshots null), `get_screenshot {id}` → string or null, `delete_annotation {id}`.
 
 Windows `settings`, `onboarding` and `detail-<id>` are normal titled windows Rust creates on
 demand with `WebviewWindowBuilder` (one per id; opening again focuses it). `menu` and `comment`

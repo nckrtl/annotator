@@ -8,7 +8,7 @@ export const runtimeModes = ["full-access", "auto-accept-edits", "auto", "approv
 export const inbox = "Inbox";
 
 export function newProject(): Project {
-  return { id: crypto.randomUUID().toLowerCase(), name: "New project", root: "", bundleIds: [], titleContains: [], urlPrefixes: [], notes: "", t3Model: "", t3RuntimeMode: "full-access" };
+  return { id: crypto.randomUUID().toLowerCase(), name: "New project", root: "", bundleIds: [], titleContains: [], urlPrefixes: [], notes: "", t3Model: "", t3RuntimeMode: "approval-required" };
 }
 
 /** A comma-separated field as a list: trimmed, without empty entries. */

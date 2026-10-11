@@ -54,8 +54,32 @@ public struct DOMInfo: Codable, Sendable, Equatable {
     }
 
     public static func decode(_ json: String) throws -> DOMInfo? {
-        guard json != "null" else { return nil }
-        return try JSONDecoder().decode(DOMInfo.self, from: Data(json.utf8))
+        guard json != "null", json.utf8.count <= 65_536 else { return nil }
+        return try JSONDecoder().decode(DOMInfo.self, from: Data(json.utf8)).clamped
+    }
+
+    /// Bounds every string and strips values a password field or a hooked page might have put in the HTML.
+    public var clamped: DOMInfo {
+        var copy = self
+        copy.name = AXElementInfo.truncate(name, to: 200)
+        copy.path = AXElementInfo.truncate(path, to: 300)
+        copy.selector = AXElementInfo.truncate(selector, to: 300)
+        copy.html = DOMInfo.redact(html)
+        copy.component = component.map { AXElementInfo.truncate($0, to: 200) }
+        copy.react = react.map { AXElementInfo.truncate($0, to: 200) }
+        copy.components = Array(components.prefix(12)).map { frame in
+            Frame(name: AXElementInfo.truncate(frame.name, to: 80), file: frame.file.map { AXElementInfo.truncate($0, to: 200) }, line: frame.line)
+        }
+        return copy
+    }
+
+    /// Drops `value` and `src` attributes, then keeps the first 300 characters.
+    public static func redact(_ html: String) -> String {
+        let stripped = html.replacingOccurrences(
+            of: #"(?i)(?:\s(?:value|src)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s>]+)"#,
+            with: "",
+            options: .regularExpression)
+        return AXElementInfo.truncate(stripped, to: 300)
     }
 
     /// A compact port of the web annotator's `identify.ts`, `react-inspect.ts` and `appearance.ts`.
@@ -161,7 +185,13 @@ public struct DOMInfo: Codable, Sendable, Equatable {
           }
 
           function html(t) {
-            const open = t.cloneNode(false).outerHTML.replace(/<\/[^>]+>$/, "");
+            const tag = t.tagName.toLowerCase();
+            const type = (t.getAttribute("type") || "").toLowerCase();
+            if ((tag === "input" || tag === "textarea") && (type === "password" || type === "hidden")) {
+              return `<${tag} type="${type}">`;
+            }
+            let open = t.cloneNode(false).outerHTML.replace(/<\/[^>]+>$/, "");
+            open = open.replace(/\s(?:value|src)=("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
             const s = text(t);
             return (open.length > 300 ? open.slice(0, 299) + "…" : open) + (s ? " " + (s.length > 120 ? s.slice(0, 119) + "…" : s) : "");
           }
@@ -236,6 +266,34 @@ public struct DOMInfo: Codable, Sendable, Equatable {
           });
         }
         """#
+}
+
+/// The Chrome DevTools port advertised on a process command line.
+public enum DevToolsLaunch {
+    public static func port(in arguments: [String]) -> UInt16? {
+        for (index, argument) in arguments.enumerated() {
+            let flag = "--remote-debugging-port"
+            if argument.hasPrefix(flag + "=") {
+                return UInt16(argument.dropFirst(flag.count + 1))
+            }
+            if argument == flag, index + 1 < arguments.count {
+                return UInt16(arguments[index + 1])
+            }
+        }
+        return nil
+    }
+}
+
+/// A DevTools WebSocket that stays on the loopback port we already checked.
+public enum DebuggerEndpoint {
+    public static func socket(from string: String, port: UInt16) -> URL? {
+        guard let url = URL(string: string),
+            let scheme = url.scheme, scheme == "ws" || scheme == "wss",
+            let host = url.host()?.lowercased(), ServiceURL.isLoopback(host),
+            url.port == Int(port)
+        else { return nil }
+        return url
+    }
 }
 
 /// Picks the DevTools page target that shows `url`.

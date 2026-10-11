@@ -85,8 +85,3 @@ pub fn open_detail(app: &tauri::AppHandle, id: &str, number: Option<i64>) {
         label: &label, title: &title, url: "index.html".into(), size: (680.0, 720.0), resizable: true, overlay_title: true, shell: None,
     });
 }
-
-/// Window labels allow only a-z, A-Z, 0-9, `-`, `/`, `:` and `_`; server ids are a subset.
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}

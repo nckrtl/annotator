@@ -45,11 +45,12 @@ impl LocalServer {
         if existing.exists() { existing } else { self.home.join(".annotator/annotations") }
     }
 
-    /// The first Node.js that exists, in the Swift app's order.
+    /// The first trusted Node.js. Fixed locations first, so a planted file under the home folder
+    /// does not outrank them.
     pub fn node(&self) -> Option<PathBuf> {
-        [".vite-plus/bin/node", ".local/share/mise/shims/node"].iter().map(|p| self.home.join(p))
-            .chain(["/opt/homebrew/bin/node", "/usr/local/bin/node"].iter().map(PathBuf::from))
-            .find(|path| is_executable(path))
+        ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].iter().map(PathBuf::from)
+            .chain([".local/share/mise/shims/node", ".vite-plus/bin/node"].iter().map(|p| self.home.join(p)))
+            .find(|path| is_trusted_executable(path))
     }
 
     /// Runs `serve.mjs <command>` (`status`, `start`, `stop`) and reads its JSON answer.
@@ -85,7 +86,7 @@ impl LocalServer {
             }
         };
         let data = std::fs::read(output).unwrap_or_default();
-        let Ok(outcome) = serde_json::from_slice::<Outcome>(&data) else {
+        let Some(outcome) = result_in(&data) else {
             let text = String::from_utf8_lossy(&data).trim().to_string();
             return Err(if text.is_empty() { "The server returned an unreadable response.".into() } else { text });
         };
@@ -99,16 +100,28 @@ impl LocalServer {
     }
 }
 
-fn is_executable(path: &Path) -> bool {
+/// The script prints one JSON object. Lines before it, such as a runtime warning, are ignored.
+fn result_in(data: &[u8]) -> Option<Outcome> {
+    String::from_utf8_lossy(data).lines().rev()
+        .map(str::trim)
+        .filter(|line| line.starts_with('{'))
+        .find_map(|line| serde_json::from_str(line).ok())
+}
+
+/// Executable, and not writable by everyone: a world-writable Node would run as the user.
+/// Follows symlinks, like FileManager.
+fn is_trusted_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path).is_ok_and(|m| {
+        let mode = m.permissions().mode();
+        m.is_file() && mode & 0o111 != 0 && mode & 0o002 == 0
+    })
 }
 
 /// Whether anything answers at `url` within 2 s: an existing server can serve the queue without
 /// becoming ours.
 pub async fn answers(url: &url::Url) -> bool {
-    let Ok(http) = reqwest::Client::builder().timeout(Duration::from_secs(2)).build() else { return false };
-    http.get(url.clone()).send().await.is_ok()
+    crate::http::short().get(url.clone()).timeout(Duration::from_secs(2)).send().await.is_ok()
 }
 
 #[cfg(test)]
@@ -141,6 +154,30 @@ mod tests {
         let error = local.run("status").await.unwrap_err();
         // Homebrew's node may exist on this Mac; then the script is missing.
         assert!(error.starts_with("Node.js was not found") || error.starts_with("The annotation server was not found"), "{error}");
+    }
+
+    #[test]
+    fn node_output_is_the_last_json_line() {
+        let data = b"(node:1) ExperimentalWarning: something\n{\"running\":true,\"error\":null}\n";
+        assert_eq!(result_in(data), Some(Outcome { running: true, error: None }));
+        assert_eq!(result_in(b"{\"running\":false}"), Some(Outcome { running: false, error: None }));
+        assert_eq!(result_in(b"warning only\n"), None);
+    }
+
+    #[test]
+    fn world_writable_node_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = temp_dir("annotator-node");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("node");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_trusted_executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!is_trusted_executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!is_trusted_executable(&file));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[tokio::test]
