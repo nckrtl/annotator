@@ -70,7 +70,7 @@ Nothing is built yet. This file is the brief. Read it all before you start.
    of an element. Use it for canvas apps, games and other UI without
    accessibility data.
 5. **Comment.** On click, freeze the highlight and show a comment panel next
-   to the element. It must be able to become key, because Drift's dictation
+   to the element. It must be able to become key, because Ofide's dictation
    pastes into the focused field. ⌘↩ submits, Esc cancels. Optional dictation
    button: see Dictation.
 6. **Capture.** Use ScreenCaptureKit, with `SCScreenshotManager` and an
@@ -98,7 +98,7 @@ settings. Run a server for development with:
 npx @nckrtl/annotator serve --port 29703 --store ~/.annotator/annotations
 ```
 
-(The user also runs one from `~/apps/t3code/apps/web` for T3 Code work:
+(The user also runs one from `~/apps/conn/apps/web` for Conn (T3 Code fork) work:
 `node node_modules/@nckrtl/annotator/bin/serve.mjs serve --port 29703 --store ~/.t3/dev/annotations`.
 Do not stop a server you did not start.)
 
@@ -157,13 +157,13 @@ existing agents already read; keep their meaning. The `native` object is new.
 
 ## Dictation
 
-Same contract as the web annotator: Drift's local API. Production is
-`http://127.0.0.1:12321`, Drift Dev is `http://127.0.0.1:12322`
+Same contract as the web annotator: Ofide's local API. Production is
+`http://127.0.0.1:12321`, Ofide Dev is `http://127.0.0.1:12322`
 (configurable). `POST /dictate` starts recording; `POST /dictate-stop` stops
 it, transcribes, and pastes into the focused field (200 when pasted; 409 means
 no active dictation; 422 means silence). The comment field must be focused and
-the app frontmost when the paste lands. See `~/apps/drift/README.md` for the
-full API. If Drift is not running, show that next to the button.
+the app frontmost when the paste lands. See `~/apps/ofide/README.md` for the
+full API. If Ofide is not running, show that next to the button.
 
 ## Permissions
 
@@ -247,7 +247,7 @@ After a signing identity change, reset grants with
 - Manual checks before you call phase 1 done, with a server running:
   1. A native app (Finder, Mail or System Settings): hover shows tight
      highlights; a click posts a record with a real `ax.path`.
-  2. An Electron app (T3 Code, Slack or VS Code): elements resolve after the
+  2. An Electron app (Conn, Slack or VS Code): elements resolve after the
      first hover (`AXManualAccessibility`).
   3. A web page in Safari or Chrome: `url` is the page URL.
   4. A second monitor, if connected: highlight and crop line up.
@@ -261,12 +261,12 @@ After a signing identity change, reset grants with
 **Phase 1 (build this first):** menu bar item, hotkey, permission onboarding,
 overlay with element highlight and window fallback, region mode, comment panel,
 capture, POST with local retry, live queue counts in the menu, settings
-(server URL, hotkey, Drift URL). Dictation button if it stays small.
+(server URL, hotkey, Ofide URL). Dictation button if it stays small.
 
 **Phase 2 (after user feedback):**
 - Pins: numbered markers for open annotations, shown on the overlay over the
   window they belong to (store window id and the position relative to the
-  window). Hide them when that window is not on screen; accept drift when
+  window). Hide them when that window is not on screen; accept ofide when
   content moves.
 - Project routing: rules in `~/.config/annotator/routes.json` map bundle id,
   window title pattern or URL prefix to a project name and root folder. Set
@@ -279,7 +279,7 @@ capture, POST with local retry, live queue counts in the menu, settings
 - `~/apps/annotator/`: the web annotator. Read `bin/serve.mjs`,
   `bin/store.mjs` and `bin/QUEUE-SKILL.md` (how agents drain the queue). Match
   its comment and pin behavior where it applies.
-- `~/apps/t3code/apps/desktop/src/snapShot/`: T3 Code's SnapShots feature
+- `~/apps/conn/apps/desktop/src/snapShot/`: Conn's (the T3 Code fork's) SnapShots feature
   (TypeScript). `MacSnapShot.ts` and `SnapShotAccessibility.ts` read window
   accessibility context and capture regions on this Mac. Use them as a
   reference for what works; do not copy the Node approach.
