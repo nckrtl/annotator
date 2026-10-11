@@ -1,0 +1,6 @@
+{
+  "identifier": "panels",
+  "description": "Menu and comment panels: events only; everything else goes through Annotator's commands",
+  "windows": ["menu", "comment"],
+  "permissions": ["core:event:default"]
+}
