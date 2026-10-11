@@ -28,14 +28,13 @@ final class QueueMonitor {
     @ObservationIgnored
     var onReachable: (() -> Void)?
 
+    /// The server sends a heartbeat every 15 s. The session refuses a redirect to another host.
     @ObservationIgnored
-    private let streamSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        // The server sends a heartbeat every 15 s.
-        configuration.timeoutIntervalForRequest = 45
-        configuration.timeoutIntervalForResource = .infinity
-        return URLSession(configuration: configuration)
-    }()
+    private let streamSession = HTTP.eventStream()
+    @ObservationIgnored
+    private var refreshing = false
+    @ObservationIgnored
+    private var needsRefresh = false
 
     func start(client: AnnotationClient?) {
         task?.cancel()
@@ -59,11 +58,16 @@ final class QueueMonitor {
     private func run(_ client: AnnotationClient) async {
         while !Task.isCancelled {
             await listen(client)
+            // A server that is not the annotation server will not become one by being asked again.
+            if connection == .wrongServer || Task.isCancelled { return }
             // The stream dropped or never opened. Poll until the server answers, then try the stream again.
-            repeat {
+            var recovered = false
+            while !recovered && !Task.isCancelled && connection != .wrongServer {
                 try? await Task.sleep(for: .seconds(3))
-                if Task.isCancelled { return }
-            } while await !refresh(client)
+                if Task.isCancelled || connection == .wrongServer { return }
+                recovered = await refresh(client)
+                if connection == .wrongServer { return }
+            }
         }
     }
 
@@ -83,8 +87,24 @@ final class QueueMonitor {
         if connection == .live { setConnection(.polling) }
     }
 
+    /// One download at a time. A second caller waits for one more pass instead of starting its own.
     @discardableResult
     private func refresh(_ client: AnnotationClient) async -> Bool {
+        if refreshing {
+            needsRefresh = true
+            return true
+        }
+        refreshing = true
+        defer { refreshing = false }
+        var ok = true
+        repeat {
+            needsRefresh = false
+            ok = await load(client)
+        } while needsRefresh && !Task.isCancelled
+        return ok
+    }
+
+    private func load(_ client: AnnotationClient) async -> Bool {
         do {
             let summary = try await client.queue()
             let recovered = failedPolls > 0 || connection != .live

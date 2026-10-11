@@ -25,7 +25,7 @@ public struct Project: Codable, Sendable, Equatable, Identifiable {
     public init(
         id: String = UUID().uuidString.lowercased(), name: String, root: String = "",
         bundleIds: [String] = [], titleContains: [String] = [], urlPrefixes: [String] = [], notes: String = "",
-        t3Model: String = "", t3RuntimeMode: String = "full-access"
+        t3Model: String = "", t3RuntimeMode: String = "approval-required"
     ) {
         self.id = id
         self.name = name
@@ -49,7 +49,7 @@ public struct Project: Codable, Sendable, Equatable, Identifiable {
         urlPrefixes = try c.decodeIfPresent([String].self, forKey: .urlPrefixes) ?? []
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         t3Model = try c.decodeIfPresent(String.self, forKey: .t3Model) ?? ""
-        t3RuntimeMode = try c.decodeIfPresent(String.self, forKey: .t3RuntimeMode) ?? "full-access"
+        t3RuntimeMode = try c.decodeIfPresent(String.self, forKey: .t3RuntimeMode) ?? "approval-required"
     }
 
     /// Records that match no project.
@@ -103,6 +103,13 @@ public struct Routes: Codable, Sendable, Equatable {
     }
 }
 
+/// A shell single-quoted string. Quotes inside the value stay data.
+public enum ShellQuote {
+    public static func single(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 /// The text to paste into an agent session so it works through the queue.
 public enum AgentPrompt {
     public enum Scope: Equatable {
@@ -115,24 +122,24 @@ public enum AgentPrompt {
     }
 
     public static func make(server: String, scope: Scope) -> String {
-        let filter: String
+        let projectName: String?
         let root: String
         let title: String
         let claim: String
         switch scope {
         case .project(let project):
             title = "Work through the annotation queue for the project \"\(project.name)\"."
-            filter = "select(.native.project == \"\(project.name)\")"
-            root = project.root.isEmpty ? "" : "PROJECT_ROOT='\(project.root)'\n"
+            projectName = project.name
+            root = project.root
             claim = "Never claim without an id: that takes work from other projects."
         case .inbox:
             title = "Work through the annotations that belong to no project (the inbox)."
-            filter = "select(.native.project == \"\(Project.inbox)\")"
+            projectName = Project.inbox
             root = ""
             claim = "Never claim without an id: that takes work from other projects."
         case .all:
             title = "Work through the whole annotation queue."
-            filter = "."
+            projectName = nil
             root = ""
             claim = ""
         }
@@ -141,15 +148,20 @@ public enum AgentPrompt {
         } else {
             "Each annotation's app, window and url show where it comes from. Ask me which folder to work in when it is not clear."
         }
-        let list = """
-            curl -s "$ANNOTATIONS_URL" | jq '[.data[] | select(.status == "todo" and .question != true) | \(filter) | del(.screenshot)]'
-            """
+        let rootLine = root.isEmpty ? "" : "PROJECT_ROOT=\(ShellQuote.single(root))\n"
+        let nameLine = projectName.map { "PROJECT_NAME=\(ShellQuote.single($0))\n" } ?? ""
+        // The name is a jq variable, so a quote in it cannot change the program.
+        let list = if projectName == nil {
+            "curl -s \"$ANNOTATIONS_URL\" | jq '[.data[] | select(.status == \"todo\" and .question != true) | del(.screenshot)]'"
+        } else {
+            "curl -s \"$ANNOTATIONS_URL\" | jq --arg project \"$PROJECT_NAME\" '[.data[] | select(.status == \"todo\" and .question != true) | select(.native.project == $project) | del(.screenshot)]'"
+        }
 
         var text = """
             \(title)
 
-            ANNOTATIONS_URL='\(server)'
-            \(root)
+            ANNOTATIONS_URL=\(ShellQuote.single(server))
+            \(rootLine)\(nameLine)
             \(place) Do not start or stop the annotation server.
 
             1. Check that `GET "$ANNOTATIONS_URL"` answers with `meta.service: "@nckrtl/annotator"`. If not, tell me and stop.

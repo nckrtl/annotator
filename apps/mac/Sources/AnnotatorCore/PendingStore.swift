@@ -19,8 +19,16 @@ public struct PendingStore: Sendable {
     public var failedDirectory: URL { root.appending(path: "failed", directoryHint: .isDirectory) }
 
     public func save(id: String, body: Data) throws {
-        try FileManager.default.createDirectory(at: pendingDirectory, withIntermediateDirectories: true)
-        try body.write(to: pendingDirectory.appending(path: "\(id).json"), options: .atomic)
+        guard Annotation.isValidID(id) else { throw Failure.invalidID }
+        try FileManager.default.createDirectory(
+            at: pendingDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let file = pendingDirectory.appending(path: "\(id).json")
+        try body.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+
+    public enum Failure: Error {
+        case invalidID
     }
 
     public func remove(id: String) {
@@ -29,7 +37,8 @@ public struct PendingStore: Sendable {
 
     /// Moves a refused record out of the retry queue.
     public func markFailed(id: String) throws {
-        try FileManager.default.createDirectory(at: failedDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: failedDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let target = failedDirectory.appending(path: "\(id).json")
         try? FileManager.default.removeItem(at: target)
         try FileManager.default.moveItem(at: pendingDirectory.appending(path: "\(id).json"), to: target)
@@ -40,8 +49,15 @@ public struct PendingStore: Sendable {
         records(in: pendingDirectory)
     }
 
-    public func failedCount() -> Int {
-        records(in: failedDirectory).count
+    public func pendingCount() -> Int { fileCount(in: pendingDirectory) }
+
+    public func failedCount() -> Int { fileCount(in: failedDirectory) }
+
+    private func fileCount(in directory: URL) -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return files.reduce(into: 0) { count, url in
+            if url.pathExtension == "json" { count += 1 }
+        }
     }
 
     func records(in directory: URL) -> [(id: String, body: Data)] {

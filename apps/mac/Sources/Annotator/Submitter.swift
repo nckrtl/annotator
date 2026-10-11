@@ -61,7 +61,7 @@ final class Submitter {
     }
 
     private func countFiles() {
-        pendingCount = store.pending().count
+        pendingCount = store.pendingCount()
         failedCount = store.failedCount()
         onChange?()
     }

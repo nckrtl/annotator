@@ -36,7 +36,7 @@ struct ProjectTests {
 
     @Test func minimalFileLoads() throws {
         let routes = try JSONDecoder().decode(Routes.self, from: Data(#"{"projects":[{"name":"Shop","urlPrefixes":["http://localhost:8000/"]}]}"#.utf8))
-        #expect(routes.projects[0].t3RuntimeMode == "full-access")
+        #expect(routes.projects[0].t3RuntimeMode == "approval-required")
         #expect(routes.projects[0].root == "")
         #expect(!routes.projects[0].id.isEmpty)
     }
@@ -50,7 +50,9 @@ struct ProjectTests {
         let prompt = AgentPrompt.make(server: "http://127.0.0.1:29703/annotations", scope: .project(t3))
         #expect(prompt.contains("ANNOTATIONS_URL='http://127.0.0.1:29703/annotations'"))
         #expect(prompt.contains("PROJECT_ROOT='/Users/me/apps/t3code'"))
-        #expect(prompt.contains(#"select(.native.project == "T3 Code Dev")"#))
+        #expect(prompt.contains("PROJECT_NAME='T3 Code Dev'"))
+        #expect(prompt.contains(#"jq --arg project "$PROJECT_NAME""#))
+        #expect(prompt.contains("select(.native.project == $project)"))
         #expect(prompt.contains("Never claim without an id"))
         #expect(prompt.hasSuffix("Run with T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT=9222 pnpm dev:desktop."))
         #expect(!prompt.contains("\n\n\n"))
@@ -60,6 +62,15 @@ struct ProjectTests {
         let prompt = AgentPrompt.make(server: "http://x/annotations", scope: .all)
         #expect(!prompt.contains("native.project =="))
         #expect(!prompt.contains("PROJECT_ROOT"))
-        #expect(AgentPrompt.make(server: "http://x/annotations", scope: .inbox).contains(#"== "Inbox""#))
+        #expect(AgentPrompt.make(server: "http://x/annotations", scope: .inbox).contains("PROJECT_NAME='Inbox'"))
+        #expect(AgentPrompt.make(server: "http://x/annotations", scope: .inbox).contains("select(.native.project == $project)"))
+    }
+
+    @Test func promptQuotesStayData() {
+        let odd = Project(name: "Nick's \"App\"", root: "/tmp/a'b")
+        let prompt = AgentPrompt.make(server: "http://127.0.0.1:29703/annotations", scope: .project(odd))
+        #expect(prompt.contains("PROJECT_ROOT='/tmp/a'\\''b'"))
+        #expect(prompt.contains("PROJECT_NAME='Nick'\\''s \"App\"'"))
+        #expect(!prompt.contains("select(.native.project == \"Nick"))
     }
 }

@@ -50,6 +50,25 @@ extension String {
     var trimmingSlash: String { hasSuffix("/") && count > 1 ? String(dropLast()) : self }
 }
 
+/// Whether a Conn CLI binary and its script live in the same app under `/Applications`.
+public enum AppBundleTrust {
+    public static func installed(executable: String, script: String) -> Bool {
+        let executable = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
+        let script = URL(fileURLWithPath: script).resolvingSymlinksInPath().path
+        guard script.hasSuffix("bin.mjs"), let app = application(containing: executable) else { return false }
+        return app.hasPrefix("/Applications/") && script.hasPrefix(app + "/")
+    }
+
+    public static func application(containing path: String) -> String? {
+        var url = URL(fileURLWithPath: path).standardizedFileURL
+        while url.path != "/" {
+            if url.pathExtension == "app" { return url.path }
+            url.deleteLastPathComponent()
+        }
+        return nil
+    }
+}
+
 public enum T3Error: Error, Equatable, CustomStringConvertible {
     case notRunning(String)
     case unauthorized

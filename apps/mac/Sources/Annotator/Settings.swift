@@ -52,7 +52,8 @@ final class Settings {
         t3Effort = defaults.string(forKey: "t3Effort") ?? "medium"
         t3Home = defaults.string(forKey: "t3Home") ?? "~/.t3/headless"
         t3WindowHome = defaults.string(forKey: "t3WindowHome") ?? "~/.t3/desktop-dev"
-        t3Nudge = defaults.object(forKey: "t3Nudge") as? Bool ?? true
+        // New installs do not send annotations onward. A saved choice is kept.
+        t3Nudge = defaults.object(forKey: "t3Nudge") as? Bool ?? false
         t3DefaultModel = defaults.string(forKey: "t3DefaultModel") ?? "claudeAgent/claude-opus-5-5"
         if !defaults.bool(forKey: "opus55DefaultApplied") {
             t3DefaultModel = "claudeAgent/claude-opus-5-5"
@@ -67,18 +68,16 @@ final class Settings {
             ?? .standard
     }
 
-    /// An http(s) URL with a host, or nil.
-    static func validURL(_ text: String) -> URL? {
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces)),
-            ["http", "https"].contains(url.scheme), url.host() != nil
-        else { return nil }
-        return url
-    }
+    /// An http(s) URL this app will call. Cleartext is only allowed on this machine.
+    static func validURL(_ text: String) -> URL? { ServiceURL.parse(text) }
+
+    /// An Ofide URL. The token stays on this machine, so the host must be loopback.
+    static func loopbackURL(_ text: String) -> URL? { ServiceURL.loopback(text) }
 
     var server: URL? { Settings.validURL(serverURL) }
     /// An Ofide client, or why there is none. Reads the token on every call, so a new token is picked up.
     func ofideClient() -> Result<OfideClient, OfideSetupError> {
-        guard let url = Settings.validURL(ofideURL) else { return .failure(OfideSetupError("The Ofide URL in Settings is not valid.")) }
+        guard let url = Settings.loopbackURL(ofideURL) else { return .failure(OfideSetupError("The Ofide URL in Settings is not valid.")) }
         do {
             let token = try OfideToken.read(OfideToken.file(bundleId: ofideApp.rawValue))
             return .success(OfideClient(base: url, token: token))

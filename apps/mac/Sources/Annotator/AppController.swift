@@ -35,7 +35,7 @@ final class AppController: NSObject, NSMenuDelegate {
                     // An existing external server can serve the queue without becoming ours.
                     var request = URLRequest(url: settings.server!)
                     request.timeoutInterval = 2
-                    if (try? await URLSession.shared.data(for: request)) == nil {
+                    if (try? await HTTP.session(timeout: 15)(request)) == nil {
                         let started = try await server.run("start")
                         serverState.running = started.running
                         queue.start(client: client)
@@ -87,6 +87,8 @@ final class AppController: NSObject, NSMenuDelegate {
     private var lastTarget: Target?
     private var commentPanel: CommentPanelController?
     private var movingComment = false
+    /// The queue connection last used to decide whether to ask the local server if it is running.
+    private var serverWatch: QueueMonitor.Connection?
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
@@ -102,7 +104,16 @@ final class AppController: NSObject, NSMenuDelegate {
         queue.onChange = { [weak self] in
             guard let self else { return }
             self.updateButton()
-            self.refreshServerStatus()
+            let connection = self.queue.connection
+            if connection != self.serverWatch {
+                self.serverWatch = connection
+                switch connection {
+                case .live, .unreachable, .wrongServer, .polling:
+                    self.refreshServerStatus()
+                case .connecting, .invalidURL:
+                    break
+                }
+            }
             if let summary = self.queue.summary { self.t3.nudge(summary: summary, projects: self.projects.routes.projects) }
         }
         queue.onReachable = { [weak self] in
@@ -115,7 +126,8 @@ final class AppController: NSObject, NSMenuDelegate {
         registerHotkey()
         queue.start(client: client)
         Task { await submitter.retryPending(to: client) }
-        observeSettings()
+        observeServer()
+        observeHotkey()
         updateButton()
 
         if !Permissions.allGranted { showOnboarding() }
@@ -225,18 +237,28 @@ final class AppController: NSObject, NSMenuDelegate {
         updateButton()
     }
 
-    private func observeSettings() {
+    private func observeServer() {
         withObservationTracking {
             _ = settings.serverURL
-            _ = settings.hotkey
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.serverState.running = false
                 self.refreshServerStatus()
                 self.queue.start(client: self.client)
+                self.observeServer()
+            }
+        }
+    }
+
+    private func observeHotkey() {
+        withObservationTracking {
+            _ = settings.hotkey
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 self.registerHotkey()
-                self.observeSettings()
+                self.observeHotkey()
             }
         }
     }
@@ -431,7 +453,10 @@ final class AppController: NSObject, NSMenuDelegate {
     private func showAnnotation(_ id: String) {
         if detailWindows[id] == nil {
             let number = queue.summary?.item(id: id)?.number.map(String.init) ?? "?"
-            let window = makeWindow(title: "Annotation #\(number)", view: AnnotationDetailView(id: id, queue: queue))
+            let window = makeWindow(title: "Annotation #\(number)", view: AnnotationDetailView(id: id, queue: queue) { [weak self] in
+                guard let client = self?.client else { return nil }
+                return await client.screenshot(id: id)
+            })
             // The view draws its own title bar with the status in it.
             AnnotationDetailView.styleTitleBar(window)
             window.isMovableByWindowBackground = true

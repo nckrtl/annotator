@@ -9,6 +9,10 @@ struct PendingStoreTests {
     @Test func saveListRemove() throws {
         try store.save(id: "a", body: Data("1".utf8))
         try store.save(id: "b", body: Data("2".utf8))
+        let file = store.root.appending(path: "pending/a.json")
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        #expect(mode.map { $0.uint16Value & 0o777 } == 0o600)
+        #expect(store.pendingCount() == 2)
         #expect(Set(store.pending().map(\.id)) == ["a", "b"])
         store.remove(id: "a")
         #expect(store.pending().map(\.id) == ["b"])
@@ -18,7 +22,13 @@ struct PendingStoreTests {
         try store.save(id: "a", body: Data("1".utf8))
         try store.markFailed(id: "a")
         #expect(store.pending().isEmpty)
+        #expect(store.pendingCount() == 0)
         #expect(store.failedCount() == 1)
+    }
+
+    @Test func rejectsIdsThatAreNotFileNames() {
+        #expect(throws: PendingStore.Failure.self) { try store.save(id: "../secret", body: Data()) }
+        #expect(store.pendingCount() == 0)
     }
 }
 
