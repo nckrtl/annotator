@@ -37,14 +37,12 @@ Add `ANNOTATOR_UI_SNAPSHOTS=/absolute/directory` to capture all views and quit.
 pair before handing back a UI change. Captures use ScreenCaptureKit’s current-process API. Full-screen behavior and
 capture of other apps need a signed, permission-granted app.
 
-## Accent color
+## Neutral appearance
 
-Settings → Theme → Accent color offers neutral, cobalt, teal, orange and violet, plus a
-custom hex field, saturation/brightness square and hue strip. The choice updates controls
-immediately and persists in this app’s local defaults (`designkit.accent`). Original restores
-the app’s default theme. It does not change system appearance or another app’s preferences.
-
-Requires DesignKit `7186ab3` or later in the sibling `design-kit` checkout.
+Every app uses DesignKit's fixed neutral appearance: ink primary actions and neutral
+selection. Settings has no Theme section or accent picker. Switches are system green
+when on; iOS uses the native full size and macOS keeps the compact DesignKit size.
+Old stored accent preferences are unused and left in place.
 
 ## Icon dependency verification — 2026-10-13
 

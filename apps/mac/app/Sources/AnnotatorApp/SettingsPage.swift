@@ -39,7 +39,6 @@ struct SettingsPage: View {
                         KitRow("Refused comments") { Button("Show \(model.state["failedCount"].int) files") { model.act("show_failed") }.buttonStyle(.kit) }
                         KitRow("Server log") { Button("Open") { model.act("show_server_log") }.buttonStyle(.kit) }
                     }
-                    KitThemeSettings()
                 } else if section == "dictation" {
                     KitGroup("Ofide", footer: "Ofide pastes into the focused comment field. Annotator waits for the paste before it submits.") {
                         KitRow("Use Ofide dictation") { KitSwitch("Use Ofide", isOn: toggle("ofideEnabled")) }
