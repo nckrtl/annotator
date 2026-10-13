@@ -20,6 +20,7 @@ struct MainWindow: View {
             else if model.page == "projects" { ProjectsPage(model: model) }
             else { HStack(spacing: 0) { AnnotationList(model: model).frame(width: 300); KitColumnDivider(); AnnotationDetail(model: model) } }
         }
+        .kitStoredAccent()
         .onChange(of: model.page) { _, _ in
             if !["settings", "projects"].contains(model.page), !model.filtered.contains(where: { $0["id"].string == model.selected }) { model.selected = "" }
         }

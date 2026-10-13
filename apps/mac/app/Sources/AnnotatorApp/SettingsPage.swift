@@ -15,6 +15,7 @@ struct SettingsPage: View {
         ScrollView {
             VStack(spacing: 22) {
                 if section == "general" {
+                    KitThemeSettings()
                     KitGroup("Annotation server", footer: "The server keeps the shared queue. An unreachable server does not discard comments; Annotator keeps them for retry.") {
                         KitRow("Server URL") { KitTextField("http://127.0.0.1:29703/annotations", text: text("serverURL")).frame(width: 290) }
                         KitRow("Start the local server on launch") { KitSwitch("Start the local server", isOn: toggle("serverAutoStart")) }

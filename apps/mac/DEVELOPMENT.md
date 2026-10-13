@@ -36,3 +36,12 @@ Add `ANNOTATOR_UI_SNAPSHOTS=/absolute/directory` to capture all views and quit.
 `scripts/snapshots.sh` builds first and sets both values. Inspect every light/dark
 pair before handing back a UI change. Captures use ScreenCaptureKit’s current-process API. Full-screen behavior and
 capture of other apps need a signed, permission-granted app.
+
+## Accent color
+
+Settings → Theme → Accent color offers neutral, cobalt, teal, orange and violet, plus a
+custom hex field, saturation/brightness square and hue strip. The choice updates controls
+immediately and persists in this app’s local defaults (`designkit.accent`). Original restores
+the app’s default theme. It does not change system appearance or another app’s preferences.
+
+Requires DesignKit `7186ab3` or later in the sibling `design-kit` checkout.
