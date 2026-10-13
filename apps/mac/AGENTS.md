@@ -246,7 +246,7 @@ scripts/build-app.sh           # build/release/Annotator.app; Nick's identity
 scripts/install.sh             # Nick's Mac only, only when explicitly asked
 ```
 
-Builds copy DesignKit and Phosphor resource bundles, the Rust core and the capture
+Builds copy DesignKit’s Heroicons resource bundle, the Rust core and the capture
 helper into the app. `sign-app.sh` signs the two child executables before signing
 the app with the hardened runtime. The identity remains
 `Apple Development: Nick Retel (G9Y9TT23QF)`, or `SIGNING_IDENTITY`.
