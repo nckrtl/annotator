@@ -15,7 +15,6 @@ struct SettingsPage: View {
         ScrollView {
             VStack(spacing: 22) {
                 if section == "general" {
-                    KitThemeSettings()
                     KitGroup("Annotation server", footer: "The server keeps the shared queue. An unreachable server does not discard comments; Annotator keeps them for retry.") {
                         KitRow("Server URL") { KitTextField("http://127.0.0.1:29703/annotations", text: text("serverURL")).frame(width: 290) }
                         KitRow("Start the local server on launch") { KitSwitch("Start the local server", isOn: toggle("serverAutoStart")) }
@@ -40,6 +39,7 @@ struct SettingsPage: View {
                         KitRow("Refused comments") { Button("Show \(model.state["failedCount"].int) files") { model.act("show_failed") }.buttonStyle(.kit) }
                         KitRow("Server log") { Button("Open") { model.act("show_server_log") }.buttonStyle(.kit) }
                     }
+                    KitThemeSettings()
                 } else if section == "dictation" {
                     KitGroup("Ofide", footer: "Ofide pastes into the focused comment field. Annotator waits for the paste before it submits.") {
                         KitRow("Use Ofide dictation") { KitSwitch("Use Ofide", isOn: toggle("ofideEnabled")) }
