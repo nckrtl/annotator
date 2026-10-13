@@ -45,3 +45,14 @@ immediately and persists in this app’s local defaults (`designkit.accent`). Or
 the app’s default theme. It does not change system appearance or another app’s preferences.
 
 Requires DesignKit `7186ab3` or later in the sibling `design-kit` checkout.
+
+## Icon dependency verification — 2026-10-13
+
+Branch `remove-phosphor`, using DesignKit `949e84f`. Removed the obsolete icon
+package pin and updated the bundle documentation. Production icons are unchanged.
+
+`scripts/build-app.sh --debug` passed, including the SwiftUI host, Swift capture
+helper, Rust core and deep/strict ad-hoc signature verification. Existing tests
+passed: 27 Swift helper tests, 7 Swift app tests, and 84 Rust tests (one existing
+ignored test). The app contains the Heroicons catalog and license and no removed
+icon package bundle. Logs: `build/remove-phosphor/`.
