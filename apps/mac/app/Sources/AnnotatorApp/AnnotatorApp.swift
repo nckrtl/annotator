@@ -24,7 +24,7 @@ import DesignKit
             }
         }
         MenuBarExtra {
-            MenuPanel(model: model).frame(width: 360).onAppear { model.act("menu_opened") }
+            MenuPanel(model: model).kitStoredAccent().frame(width: 360).onAppear { model.act("menu_opened") }
         } label: {
             Image(systemName: model.state["annotating"].bool ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int

@@ -15,7 +15,7 @@ import AnnotatorCore
         window.title = "Annotator permissions"; window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true; window.standardWindowButton(.zoomButton)?.isHidden = true
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: PermissionsView(model: model).ignoresSafeArea())
+        window.contentView = NSHostingView(rootView: PermissionsView(model: model).kitStoredAccent().ignoresSafeArea())
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(); permissionWindow = window
     }
     private var commentGeneration = 0
@@ -47,7 +47,7 @@ import AnnotatorCore
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 2)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .canJoinAllApplications]
         panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
-        panel.contentView = NSHostingView(rootView: CommentView(model: model))
+        panel.contentView = NSHostingView(rootView: CommentView(model: model).kitStoredAccent())
         commentPanel = panel; return panel
     }
     func focusComment() { commentPanel?.makeKeyAndOrderFront(nil); NSApp.activate(); NotificationCenter.default.post(name: .focusComment, object: nil) }
