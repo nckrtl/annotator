@@ -16,9 +16,10 @@ change anything.
 
 ## Status and scope
 
-- Repo: `~/apps/annotator-mac` (this folder). Git is initialized; there is no
-  remote yet. Ask the user before you create one.
-- The web package lives at `~/apps/annotator`. Do not change it from here.
+- Repo: `apps/mac` (this folder) in the public `nckrtl/annotator` monorepo,
+  checked out at `~/apps/annotator`. The root `AGENTS.md` covers the layout
+  and the release rules.
+- The web package lives in `packages/annotator`. Do not change it from here.
   This app only talks to its server over HTTP.
 - Phase 1 is done. Ask the user before you start phase 2.
 
@@ -116,7 +117,7 @@ Endpoints, all JSON with `Content-Type: application/json`:
 | `GET <base>/skill` | The agent instructions for draining the queue. |
 
 The server accepts ids matching `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$`
-(`validId` in `~/apps/annotator/bin/store.mjs`). Use a lowercase UUID string.
+(`validId` in `packages/annotator/bin/store.mjs`). Use a lowercase UUID string.
 
 Record this app posts. The first group are the fields the web annotator and
 existing agents already read; keep their meaning. The `native` object is new.
@@ -286,7 +287,7 @@ capture, POST with local retry, live queue counts in the menu, settings
 
 ## Prior art to read
 
-- `~/apps/annotator/`: the web annotator. Read `bin/serve.mjs`,
+- `packages/annotator/`: the web annotator. Read `bin/serve.mjs`,
   `bin/store.mjs` and `bin/QUEUE-SKILL.md` (how agents drain the queue). Match
   its comment and pin behavior where it applies.
 - `~/apps/conn/apps/desktop/src/snapShot/`: Conn's (the T3 Code fork's) SnapShots feature

@@ -57,7 +57,7 @@ impl LocalServer {
     pub async fn run(&self, command: &str) -> Result<Outcome, String> {
         let node = self.node()
             .ok_or("Node.js was not found. Install Node.js 22 or newer to start the annotation server.")?;
-        let script = self.home.join("apps/annotator/bin/serve.mjs");
+        let script = self.home.join("apps/annotator/packages/annotator/bin/serve.mjs");
         if !script.exists() {
             return Err(format!("The annotation server was not found at {}.", script.display()));
         }
@@ -187,7 +187,7 @@ mod tests {
         assert!(!answers(&crate::testutil::closed_url("/annotations")).await);
     }
 
-    /// Needs Node.js and ~/apps/annotator, like the Swift test.
+    /// Needs Node.js and the monorepo at ~/apps/annotator, like the Swift test.
     #[tokio::test]
     #[ignore]
     async fn server_lifecycle() {
