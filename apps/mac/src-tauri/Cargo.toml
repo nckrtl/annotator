@@ -1,0 +1,30 @@
+[package]
+name = "annotator"
+version = "0.1.0"
+description = "Annotate anything on screen"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+objc2 = "0.6"
+objc2-foundation = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tokio = { version = "1", features = ["time", "sync", "macros", "process", "io-util", "rt-multi-thread", "fs"] }
+futures-util = "0.3"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+security-framework = "3"
+libc = "0.2"
+url = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Proc macros and build scripts are stripped by default in release builds. On macOS 27 the
+# stripped proc-macro dylibs fail to load, so a clean release build fails. They never ship.
+[profile.release.build-override]
+strip = false

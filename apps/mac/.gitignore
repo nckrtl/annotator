@@ -1,0 +1,13 @@
+.build/
+.swiftpm/
+/build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+.DS_Store
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+native/.build/
+tsconfig.tsbuildinfo

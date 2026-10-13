@@ -1,7 +1,9 @@
 name: Release
 
-# Publishes to npm when a version tag (v1.2.3) is pushed. npm trusts this
-# workflow through OIDC trusted publishing, so no npm token is stored.
+# Publishes packages/annotator to npm when a version tag (v1.2.3) is pushed.
+# npm trusts this workflow through OIDC trusted publishing, so no npm token is
+# stored. The trust names this repository and this file name: keep
+# .github/workflows/release.yml. Mac app releases will use mac-v* tags.
 on:
   push:
     tags: ["v*"]
@@ -13,6 +15,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    defaults:
+      run:
+        working-directory: packages/annotator
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -28,7 +33,7 @@ jobs:
         with:
           node-version: 24
 
-      - name: Check the tag matches package.json
+      - name: Check the tag matches packages/annotator/package.json
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
