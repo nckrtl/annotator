@@ -6,7 +6,8 @@
     "author": "Nick Retel",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/nckrtl/annotator.git"
+        "url": "git+https://github.com/nckrtl/annotator.git",
+        "directory": "packages/annotator"
     },
     "bin": {
         "annotator": "bin/serve.mjs"
