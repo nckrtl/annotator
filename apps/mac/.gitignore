@@ -11,3 +11,6 @@ src-tauri/gen/
 src-tauri/binaries/
 native/.build/
 tsconfig.tsbuildinfo
+app/.build/
+app/.swiftpm/
+Snapshots/

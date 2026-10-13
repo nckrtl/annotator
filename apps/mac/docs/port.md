@@ -1,24 +1,47 @@
-# Port to Tauri: the contract between the three parts
+# Native app process contracts
 
-The Swift app (`Sources/`, `Tests/`, removed after the port; see commit 9cf7134 and the review fixes in b10914f) was the reference. Every feature it has must exist in the port,
-with the same behavior and the same texts (Simplified Technical English: short, active, plain).
-Read the Swift file named in each section before you write its replacement. When this document
-and the Swift app disagree on behavior, the Swift app wins; when they disagree on the interface
-between the parts, this document wins.
+The SwiftUI host owns windows, menu-bar UI, Carbon shortcuts and focus. Rust owns
+settings, queue and integrations. The capture helper owns Accessibility,
+ScreenCaptureKit and the desktop overlay. No Mac webviews remain.
 
-Parts:
-- `native/`: the Swift helper `annotator-native` (SwiftPM). Accessibility, overlay, capture, DevTools.
-- `src-tauri/`: the Rust core. All state and I/O. Windows are views of it.
-- `src/`: React views. One Vite entry (`src/main.tsx`) renders by window label.
+- `app/Sources/AnnotatorApp`: SwiftUI/AppKit views on DesignKit.
+- `app/Sources/AnnotatorCore`: UI-free JSON pipe client and dictation lifecycle.
+- `src-tauri`: historical directory name; now a plain Rust executable.
+- `native`: the existing capture helper and its UI-free record target.
 
-Already there (from the spike, reuse and extend): `src-tauri/src/{main,panels,helper}.rs`,
-`native/Sources/AnnotatorNative/main.swift` (JSON-lines loop), `src/ui.tsx` + `src/ui.css`
-(copied from Ofide; do not edit them, add app styles to `src/app.css`), `scripts/*.sh`.
+## Host protocol (SwiftUI ↔ Rust)
+
+Inherited stdin/stdout pipes, one JSON object per line. No listening socket.
+Requests: `{"id":"uuid","command":"get_state","args":{}}`.
+Replies: `{"id":"uuid","result":...}` or `{"id":"uuid","error":"message"}`.
+Events: `{"event":"state","payload":...}`. Events and replies can interleave;
+request IDs match replies. Commands and camelCase argument names remain stable.
+Malformed arguments and unknown commands return errors. Host requests time out
+after 135 seconds, including Ofide's long transcription stop. EOF stops the core
+and the capture helper. Logs go to stderr and the existing log file, never stdout.
+
+UI events, in addition to the state and comment events below:
+
+- `navigate {page,id?}` opens a page or selects an annotation in the library.
+- `onboarding`, `alert {title,message}`, `quit`, `relaunch` request host actions.
+- `show-comment {x,y,width,height}` uses global top-left points; `hide-comment`
+  invalidates pending placement. `hide-menu` hides the menu-bar window.
+- `register-hotkey {slot,keyCode,modifiers}` and `unregister-hotkey <slot>` are
+  handled on the main thread. Slot 1 toggles, slot 2 is Escape while hovering.
+- Host sends `hotkey_pressed {slot}` and `hotkey_error {message}`.
+- Host sends `menu_opened` to refresh permissions and projects.
+- `comment_origin {target,screens,mouse,size}` returns `[x,y]` in AppKit points.
+  Screens carry `frame` and `visible` rects in AppKit points. The core keeps its
+  tested multi-display placement; the UI sends the current screen and panel sizes.
+
+The host passes `ANNOTATOR_HOST_PID` to the core and helper. The helper excludes
+that pid, its parent and itself from capture and hit tests. `ANNOTATOR_HELPER`
+may select a controlled helper fixture in integration tests.
 
 ## 1. Helper protocol (Rust ↔ `annotator-native`)
 
 JSON lines. Commands on stdin `{"action": …}`, events on stdout `{"type": …}`. Rust re-emits
-every helper event as a Tauri event of the same name only where listed below; otherwise Rust
+every helper event as a host event of the same name only where listed below; otherwise Rust
 handles it.
 
 Commands:
@@ -62,14 +85,14 @@ while the comment panel is open.
 
 Persisted state:
 - Settings: `~/Library/Application Support/com.nckrtl.annotator/settings.json`. Fields and
-  defaults from `Sources/Annotator/Settings.swift` in camelCase: `serverAutoStart, serverURL,
+  defaults from `src-tauri/src/settings.rs` in camelCase: `serverAutoStart, serverURL,
   ofideEnabled, ofideAutoStart, ofideURL, ofideApp, t3Enabled, t3Endpoint, t3Effort, t3Home,
   t3WindowHome, t3Nudge, t3DefaultModel, hotkey {keyCode, modifiers (Carbon flags)}`.
 - Conn sessions: `…/com.nckrtl.annotator/sessions.json` (the former `t3Sessions` value).
-- Projects: `~/.config/annotator/routes.json`, same format as `Projects.swift`.
+- Projects: `~/.config/annotator/routes.json`, same format as `src-tauri/src/projects.rs`.
 - Retry store: `~/Library/Application Support/Annotator/{pending,failed}/<id>.json` (unchanged).
 - Keychain: service `com.nckrtl.annotator.t3`, account = Conn endpoint (unchanged).
-- Local server: as `LocalServer.swift`.
+- Local server: `src-tauri/src/local_server.rs`.
 
 ### Events Rust emits (to all windows)
 
@@ -78,7 +101,7 @@ Persisted state:
 - `comment-opened`: `CommentTarget` (to the `comment` window), when the panel opens.
 - `comment-finish`: (to `comment`) a click elsewhere: finish dictation, then call
   `comment_finish_done { submit: bool, text }`.
-- `menu-opened`: (to `menu`).
+- `comment-cancel`: stop dictation when annotate mode ends.
 
 ```ts
 type Tone = "ok" | "warning" | "error";
@@ -105,7 +128,7 @@ type CommentTarget = { label: string; mode: "element" | "window" | "region"; cap
   dictation: null | { url: string; app: string; autoStart: boolean } };
 ```
 
-### Commands (`invoke`)
+### Commands
 
 Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|"restart"}`,
 `show_server_log`, `open_server`, `open_settings {tab?: "general"|"projects"}`, `open_onboarding`,
@@ -122,7 +145,7 @@ Settings: `get_settings`, `save_settings {settings}` (re-registers the hotkey, r
 when the URL changed), `hotkey_recording {recording: bool}` (unregister the toggle hotkey while the
 recorder listens), `conn_save_connection {endpoint, token}` (validates like SettingsView; token to
 Keychain; returns the message), `conn_token_saved {endpoint}` → bool, `get_projects`,
-`save_projects {routes}` (returns an error string on failure), `choose_folder` → path or null,
+`save_projects {routes}` (returns an error string on failure),
 `last_target_app` → `{name, bundleId, title, url} | null`.
 
 Onboarding: `request_permission {kind: "accessibility"|"screenRecording"}`,
@@ -130,9 +153,7 @@ Onboarding: `request_permission {kind: "accessibility"|"screenRecording"}`,
 
 Detail: `get_queue` → `QueueItem[]` (screenshots null), `get_screenshot {id}` → string or null, `delete_annotation {id}`.
 
-Windows `settings`, `onboarding` and `detail-<id>` are normal titled windows Rust creates on
-demand with `WebviewWindowBuilder` (one per id; opening again focuses it). `menu` and `comment`
-are the NSPanels in `panels.rs`.
+Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decisions.
 
 ### Flows (port from `AppController.swift`)
 - Toggle (hotkey, menu): without both permissions open onboarding; else `annotate on`,
@@ -149,25 +170,22 @@ are the NSPanels in `panels.rs`.
 - Tray: icon `highlighter` (template), plus the open count as the tray title; while annotating
   use a second template icon. The health colour shows in the menu's first line.
 
-## 3. React views
+## 3. SwiftUI views
 
-`menu`: everything in `AppController.menuNeedsUpdate`, as a panel (360 wide): health line with
-the server URL; server start/stop/restart/log; Start/Stop Annotating with the shortcut; warnings;
-"Open n · In progress n" with rows (`AnnotationRow.swift`: status icon, `#n comment`, spinner
-in progress; a question shows its own icon); "n more on the server"; Clear Open Annotations…
-with an inline confirmation that says what the NSAlert said; a Done disclosure (up to 50);
-pending / Retry Now / refused Show…; Conn Sessions (section, one row per project: start, or new +
-open; Copy Pairing URL; errors); Copy Agent Prompt (projects, Inbox, All Annotations); Edit
-Projects…; `MoreMenu` with Open Server URL, Settings… ⌘,, Quit Annotator ⌘Q. Esc closes.
-Long lists scroll inside the panel; the panel height follows the content up to 640.
+The library combines list and detail. It sorts annotations by newest number,
+which preserves the queue's timeline rather than sorting comments alphabetically.
+Search, filters, screenshots, copy and confirmed deletion live here. Settings,
+Projects and the menu provide server controls, retries, failed files, Conn sessions
+and agent prompts. The editor preserves project order because routing uses the
+first match. All saved JSON shapes and locations stay the same.
 
-`comment`: `CommentPanel.swift`, including the whole Ofide dictation state machine (off,
-checking, unavailable, idle, recording, transcribing; auto start; submit while recording stops
-and waits for the paste; cancel calls `/dictate/cancel` once; Ofide's own Esc handling via
-`status.cancelledAt`). ↩ submits, ⇧↩ new line, IME composing respected, Esc cancels.
+The comment owns one `Dictation` session. Start/stop/cancel stay serialized in
+Rust; Swift also waits for an old cancellation before starting a new recording.
+A session generation rejects late responses. Submit waits for start, then stop,
+then a changed and settled text field. A missing paste or silence keeps the
+comment open. Ofide cancellation closes it. Return submits, Shift-Return inserts
+a line, and marked text keeps input-method composition. Escape cancels.
 
-`settings`: sidebar with General and Projects, content per `SettingsView.swift` and
-`ProjectsView.swift`; Ofide grouped-settings structure (`Group`, `Row`, `Disclosure`).
-
-`onboarding`: `Permissions.swift` OnboardingView. `detail`: `AnnotationDetail.swift` and
-`Lightbox.swift` (the lightbox inside the window).
+`ANNOTATOR_UI_DEMO=1` works only in debug builds. It uses made-up data and starts
+no core, helper, server or dictation session. Snapshot mode captures the actual
+windows through ScreenCaptureKit's current-process API, without a TCC grant.

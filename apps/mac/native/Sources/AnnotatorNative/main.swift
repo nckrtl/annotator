@@ -6,6 +6,13 @@ import AppKit
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
+    #if DEBUG
+    if let output = ProcessInfo.processInfo.environment["ANNOTATOR_OVERLAY_SNAPSHOTS"] {
+        Task { await OverlayDemo.capture(directory: output); NSApp.terminate(nil) }
+        app.run()
+        return
+    }
+    #endif
     let helper = Helper()
 
     // Quit when Annotator closes our stdin. Lines go to the main queue in order.

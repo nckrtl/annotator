@@ -43,7 +43,7 @@ pub fn appkit_from_top_left(rect: Rect, main_height: f64) -> Rect {
 }
 
 /// One screen in AppKit coordinates: its frame and its visible frame (without menu bar and Dock).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct Screen {
     pub frame: Rect,
     pub visible: Rect,

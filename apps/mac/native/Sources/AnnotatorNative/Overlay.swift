@@ -187,6 +187,10 @@ final class OverlayController {
         onSelect?(target)
     }
 
+    #if DEBUG
+    func showDemo(_ target: Target) { state = .frozen(target) }
+    #endif
+
     private func redraw() {
         panels.forEach { $0.contentView?.needsDisplay = true }
     }
@@ -262,7 +266,7 @@ final class OverlayView: NSView {
         case .dragging(let start, let end):
             let rect = CGRect(
                 x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
-            drawBox(rect, in: window, color: .systemPurple, dashed: true, label: "Region")
+            drawBox(rect, in: window, color: .labelColor, dashed: true, label: "Region")
         default:
             break
         }
@@ -270,9 +274,9 @@ final class OverlayView: NSView {
 
     private func drawTarget(_ target: Target, in window: NSWindow) {
         switch target.mode {
-        case .element: drawBox(target.frame, in: window, color: .controlAccentColor, dashed: false, label: target.overlayLabel)
-        case .window: drawBox(target.frame, in: window, color: .systemOrange, dashed: true, label: target.overlayLabel)
-        case .region: drawBox(target.frame, in: window, color: .systemPurple, dashed: true, label: target.overlayLabel)
+        case .element: drawBox(target.frame, in: window, color: .labelColor, dashed: false, label: target.overlayLabel)
+        case .window: drawBox(target.frame, in: window, color: .labelColor, dashed: true, label: target.overlayLabel)
+        case .region: drawBox(target.frame, in: window, color: .labelColor, dashed: true, label: target.overlayLabel)
         }
     }
 
@@ -287,11 +291,16 @@ final class OverlayView: NSView {
         let path = NSBezierPath(rect: local.insetBy(dx: 1, dy: 1))
         path.lineWidth = 2
         if dashed { path.setLineDash([6, 4], count: 2, phase: 0) }
+        // A contrasting halo keeps the neutral outline visible over arbitrary screen content.
+        path.lineWidth = 4
+        NSColor.textBackgroundColor.withAlphaComponent(0.9).setStroke()
+        path.stroke()
+        path.lineWidth = 2
         color.setStroke()
         path.stroke()
 
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.textBackgroundColor,
         ]
         let text = NSAttributedString(string: label, attributes: attributes)
         let size = text.size()

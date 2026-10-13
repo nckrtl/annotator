@@ -5,7 +5,7 @@ Two parts share this repository. Each has its own guide; read it before you chan
 ## Layout
 
 - `packages/annotator`: the npm package `@nckrtl/annotator` (TypeScript, Vite+). Guide: its `README.md`.
-- `apps/mac`: Annotator for macOS (Tauri 2, React, a Rust core and a Swift helper). Guide: `apps/mac/AGENTS.md` and `apps/mac/DEVELOPMENT.md`. Its `package.json` name is `annotator` and stays private.
+- `apps/mac`: Annotator for macOS (SwiftUI on DesignKit, a Rust core and a Swift capture helper). Guide: `apps/mac/AGENTS.md` and `apps/mac/DEVELOPMENT.md`. Its `package.json` name is `annotator` and stays private.
 - `package.json`: the bun workspace root. One `bun.lock` covers both parts. Bun 1.4.2.
 - `.github/workflows`: `ci.yml` tests both parts; `release.yml` publishes the npm package.
 
@@ -28,9 +28,10 @@ bun run test
 The Mac app, from `apps/mac`:
 
 ```sh
-bun run build                 # tsc -b and vite build
-scripts/test.sh               # swift test, cargo test, tsc and bun test
-bun run tauri build --debug   # an unsigned debug app; needs scripts/build-native.sh first
+bun run build                 # SwiftUI app; needs ~/apps/design-kit (see Mac guide)
+scripts/test.sh               # Swift helper, Rust core, Swift bridge and dictation
+scripts/build-app.sh --debug  # ad-hoc native bundle, no install
+scripts/snapshots.sh          # light and dark UI captures with made-up data
 ```
 
 `scripts/install.sh` signs with the user's identity and installs into `/Applications`. Run it only on the user's Mac, and only when they ask.

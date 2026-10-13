@@ -1,35 +1,38 @@
 # Development
 
-```sh
-bun install
-scripts/test.sh       # every test suite
-scripts/install.sh    # build, sign, install and start /Applications/Annotator.app
-```
-
-Each install replaces the running app. The annotation server keeps running.
-The permission grants stay, because the bundle id and signing identity stay
-the same.
-
-## Layout previews
-
-`bun run dev` serves the React views on port 1430. Open
-`http://127.0.0.1:1430/preview.html?window=menu` to see one window with sample
-data and a mocked Rust side. Other windows: `comment`, `settings`,
-`onboarding`, `detail-id-215`. Vite reloads the page on save.
-
-## Where things are
-
-- React views: `src/`. Shared look: `src/ui.tsx` and `src/ui.css`, copied from
-  Ofide. Do not edit them here; change them in Ofide and copy them over.
-- Rust core: `src-tauri/src/`. One module per area (`queue.rs`, `conn.rs`,
-  `ofide.rs`, …); `app.rs` wires them and builds the `state` the views show.
-- Swift helper: `native/`. Overlay, hit test, capture and DevTools lookup.
-- The contract between the parts: `docs/port.md`.
-
-## Logs
+The Mac UI is SwiftUI on the shared DesignKit. See [AGENTS.md](AGENTS.md) for
+surface decisions, build requirements and verification limits.
 
 ```sh
-tail -f ~/Library/Logs/Annotator/annotator.log
+# Clone the private shared kit beside this repository, if missing.
+git clone https://github.com/nckrtl/design-kit ~/apps/design-kit
+bun install --frozen-lockfile
+scripts/build-app.sh --debug
+open build/debug/Annotator.app
+scripts/test.sh
+scripts/smoke-core.py
+scripts/snapshots.sh
 ```
 
-The helper's output and errors go to the same log.
+`DESIGN_KIT_PATH` can override the package path. macOS 26 and Swift 6.2 or newer
+are required. The private npm workspace remains named `annotator`.
+
+Only run `scripts/install.sh` on Nick's Mac when asked. It builds a release with
+his signing identity, installs it in `/Applications`, and preserves the bundle id.
+The debug build stays in this checkout and is signed ad hoc.
+
+The Rust source directory retains its historical name, `src-tauri`; it no longer
+depends on Tauri. Its command handlers and events are carried by inherited JSON
+pipes. See [docs/port.md](docs/port.md). The npm package and its browser canvas
+remain independent.
+
+Debug demo mode uses made-up data and does not start the core or capture helper:
+
+```sh
+ANNOTATOR_UI_DEMO=1 build/debug/Annotator.app/Contents/MacOS/Annotator
+```
+
+Add `ANNOTATOR_UI_SNAPSHOTS=/absolute/directory` to capture all views and quit.
+`scripts/snapshots.sh` builds first and sets both values. Inspect every light/dark
+pair before handing back a UI change. Captures use ScreenCaptureKit’s current-process API. Full-screen behavior and
+capture of other apps need a signed, permission-granted app.

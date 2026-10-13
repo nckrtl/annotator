@@ -67,19 +67,18 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Type-check and build the views
-        run: bun run build
+      - name: Check out DesignKit
+        uses: actions/checkout@v4
+        with:
+          repository: nckrtl/design-kit
+          token: ${{ secrets.DESIGN_KIT_TOKEN }}
+          path: design-kit
 
-      - name: Test the views
-        run: bun test scripts/
-
-      - name: Test the Swift helper
-        run: swift test --package-path native
-
-      # The Tauri build bundles the helper, so cargo test needs it. It is signed ad hoc, with no identity.
-      - name: Build the Swift helper
-        run: bash scripts/build-native.sh
-
-      - name: Test the Rust core
-        working-directory: apps/mac/src-tauri
-        run: cargo test
+      - name: Build and test native app
+        env:
+          DESIGN_KIT_PATH: ${{ github.workspace }}/design-kit/DesignKit
+        run: |
+          bun run build
+          scripts/test.sh
+          scripts/build-app.sh --debug
+          scripts/smoke-core.py

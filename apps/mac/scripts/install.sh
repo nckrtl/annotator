@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 bash scripts/build-app.sh
-built=src-tauri/target/release/bundle/macos/Annotator.app
+built=build/release/Annotator.app
 osascript -e 'quit app id "com.nckrtl.annotator"' 2>/dev/null || true
 pkill -x Annotator 2>/dev/null || true
 pkill -f '/Annotator.app/Contents/MacOS/annotator$' 2>/dev/null || true

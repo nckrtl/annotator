@@ -6,65 +6,54 @@ use crate::projects::{agent_prompt, Routes, Scope};
 use crate::settings::{home, Settings};
 use crate::{helper, ofide, panels, windows};
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use crate::runtime::AppHandle;
 
 // MARK: - Menu
 
-#[tauri::command]
 pub fn get_state(app: AppHandle) -> Value {
     app::app_state(&app)
 }
 
-#[tauri::command]
 pub fn toggle_annotating(app: AppHandle) {
     panels::hide_menu(&app);
     app::toggle(&app);
 }
 
-#[tauri::command]
 pub async fn server_control(app: AppHandle, action: String) -> Result<(), String> {
     app::server_control(&app, &action).await
 }
 
-#[tauri::command]
 pub fn show_server_log(app: AppHandle) -> Result<(), String> {
     panels::hide_menu(&app);
     app::show_server_log(&app)
 }
 
-#[tauri::command]
 pub fn open_server(app: AppHandle) -> Result<(), String> {
     panels::hide_menu(&app);
     let url = app::settings(&app).server().ok_or("The server URL in Settings is not valid")?;
     app::open(url.as_str())
 }
 
-#[tauri::command]
 pub fn open_settings(app: AppHandle, tab: Option<String>) {
     windows::open_settings(&app, tab);
 }
 
-#[tauri::command]
 pub fn open_onboarding(app: AppHandle) {
     windows::open_onboarding(&app);
 }
 
-#[tauri::command]
 pub fn open_annotation(app: AppHandle, id: String) -> Result<(), String> {
     app::open_annotation(&app, &id)
 }
 
-#[tauri::command]
 pub async fn clear_open(app: AppHandle) -> Value {
     json!({"failed": app::clear_open(&app).await})
 }
 
-#[tauri::command]
 pub fn retry_now(app: AppHandle) {
-    tauri::async_runtime::spawn(async move { app::retry_pending(&app).await });
+    crate::runtime::spawn(async move { app::retry_pending(&app).await });
 }
 
-#[tauri::command]
 pub fn show_failed(app: AppHandle) -> Result<(), String> {
     panels::hide_menu(&app);
     let folder = shared(&app).submitter.store.failed_directory();
@@ -77,7 +66,6 @@ fn project(app: &AppHandle, id: &str) -> Result<crate::projects::Project, String
         .ok_or_else(|| format!("No project with id {id}."))
 }
 
-#[tauri::command]
 pub async fn conn_start(app: AppHandle, project_id: String) -> Result<(), String> {
     let project = project(&app, &project_id)?;
     let settings = app::settings(&app);
@@ -91,7 +79,6 @@ pub async fn conn_start(app: AppHandle, project_id: String) -> Result<(), String
     result
 }
 
-#[tauri::command]
 pub async fn conn_open(app: AppHandle, project_id: String) -> Result<(), String> {
     panels::hide_menu(&app);
     let project = project(&app, &project_id)?;
@@ -105,7 +92,6 @@ pub async fn conn_open(app: AppHandle, project_id: String) -> Result<(), String>
 }
 
 /// For adding the session server in a Conn window: Settings › Connections › Add environment.
-#[tauri::command]
 pub async fn conn_pairing_url(app: AppHandle) -> Result<String, String> {
     let conn = shared(&app).conn.clone();
     let result = conn.pairing_url(&app::settings(&app)).await;
@@ -125,7 +111,6 @@ pub async fn conn_pairing_url(app: AppHandle) -> Result<String, String> {
 }
 
 /// `scope`: `inbox`, `all` or a project id.
-#[tauri::command]
 pub fn copy_prompt(app: AppHandle, scope: String) -> Result<(), String> {
     let server = app::settings(&app).server_url;
     let text = match scope.as_str() {
@@ -136,45 +121,37 @@ pub fn copy_prompt(app: AppHandle, scope: String) -> Result<(), String> {
     app::copy(&text)
 }
 
-#[tauri::command]
 pub fn hide_menu(app: AppHandle) {
     panels::hide_menu(&app);
 }
 
-#[tauri::command]
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-#[tauri::command]
 pub fn resize_menu(app: AppHandle, height: f64) {
     panels::resize_menu(&app, height);
 }
 
 // MARK: - Comment
 
-#[tauri::command]
 pub fn submit_comment(app: AppHandle, text: String) -> Result<(), String> {
     app::submit_comment(&app, &text)
 }
 
-#[tauri::command]
 pub fn cancel_comment(app: AppHandle) {
     app::cancel_comment(&app);
 }
 
-#[tauri::command]
 pub fn comment_finish_done(app: AppHandle, submit: bool, text: String, keep: Option<bool>) {
     app::comment_finish_done(&app, submit, &text, keep.unwrap_or(false));
 }
 
-#[tauri::command]
 pub fn resize_comment(app: AppHandle, height: f64) {
     panels::resize_comment(&app, height);
 }
 
 /// Proxies Ofide's Local API: `status`, `start`, `stop` or `cancel`. Rejects only for setup errors.
-#[tauri::command]
 pub async fn ofide(app: AppHandle, action: String) -> Result<Value, String> {
     let settings = app::settings(&app);
     let base = settings.ofide().ok_or("The Ofide URL in Settings is not valid.")?;
@@ -187,25 +164,21 @@ pub async fn ofide(app: AppHandle, action: String) -> Result<Value, String> {
     Ok(answer.json())
 }
 
-#[tauri::command]
 pub fn alert(app: AppHandle, title: String, message: String) {
     app::alert(&app, &title, &message);
 }
 
 // MARK: - Settings
 
-#[tauri::command]
 pub fn get_settings(app: AppHandle) -> Settings {
     app::settings(&app)
 }
 
-#[tauri::command]
 pub fn save_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     app::save_settings(&app, settings)
 }
 
 /// Pauses the toggle shortcut while the recorder listens.
-#[tauri::command]
 pub fn hotkey_recording(app: AppHandle, recording: bool) {
     if recording {
         crate::hotkey::unregister(&app, crate::hotkey::Slot::Toggle);
@@ -214,7 +187,6 @@ pub fn hotkey_recording(app: AppHandle, recording: bool) {
     }
 }
 
-#[tauri::command]
 pub fn conn_save_connection(app: AppHandle, endpoint: String, token: String) -> Result<String, String> {
     let endpoint = conn::endpoint(&endpoint)?;
     if !token.is_empty() {
@@ -226,12 +198,10 @@ pub fn conn_save_connection(app: AppHandle, endpoint: String, token: String) -> 
     Ok("Connection saved.".into())
 }
 
-#[tauri::command]
 pub fn conn_token_saved(endpoint: String) -> bool {
     matches!(keychain::read(&endpoint), Ok(Some(_)))
 }
 
-#[tauri::command]
 pub fn get_projects(app: AppHandle) -> Value {
     let state = shared(&app);
     let mut core = state.core.lock().unwrap();
@@ -240,22 +210,14 @@ pub fn get_projects(app: AppHandle) -> Value {
 }
 
 /// Null on success, or why the file was not saved.
-#[tauri::command]
 pub fn save_projects(app: AppHandle, routes: Routes) -> Option<String> {
     let result = shared(&app).core.lock().unwrap().projects.update(routes);
     app::emit_state(&app);
     result.err()
 }
 
-#[tauri::command]
-pub async fn choose_folder(app: AppHandle) -> Option<String> {
-    use tauri_plugin_dialog::DialogExt;
-    let folder = app.dialog().file().blocking_pick_folder()?;
-    folder.into_path().ok().map(|path| path.to_string_lossy().into_owned())
-}
 
 /// The app and window of the last annotation, to fill in project rules quickly.
-#[tauri::command]
 pub fn last_target_app(app: AppHandle) -> Value {
     let record = shared(&app).core.lock().unwrap().last_target.clone();
     let Some(record) = record else { return Value::Null };
@@ -266,40 +228,33 @@ pub fn last_target_app(app: AppHandle) -> Value {
 
 // MARK: - Onboarding
 
-#[tauri::command]
 pub fn request_permission(app: AppHandle, kind: String) -> Result<(), String> {
     app::request_permission(&app, &kind)
 }
 
-#[tauri::command]
 pub fn open_privacy(kind: String) -> Result<(), String> {
     app::open(&app::privacy_url(&kind))
 }
 
-#[tauri::command]
 pub fn relaunch(app: AppHandle) {
     app::relaunch(&app);
 }
 
-#[tauri::command]
 pub async fn get_permissions(app: AppHandle) -> app::Permissions {
     app::fresh_permissions(&app).await
 }
 
 // MARK: - Detail
 
-#[tauri::command]
 pub fn get_queue(app: AppHandle) -> Vec<Value> {
     shared(&app).queue.items()
 }
 
 /// The screenshot of one record. The live queue does not keep them.
-#[tauri::command]
 pub async fn get_screenshot(app: AppHandle, id: String) -> Option<String> {
     app::client(&app)?.screenshot(&id).await
 }
 
-#[tauri::command]
 pub async fn delete_annotation(app: AppHandle, id: String) -> Result<(), String> {
     let client = app::client(&app).ok_or("The server URL in Settings is not valid")?;
     let deleted = client.delete(&id).await;
@@ -313,12 +268,66 @@ pub async fn delete_annotation(app: AppHandle, id: String) -> Result<(), String>
 
 // MARK: - Development
 
-#[tauri::command]
 pub fn helper(app: AppHandle, command: Value) -> Result<(), String> {
     helper::send(&app, &command)
 }
 
-#[tauri::command(rename_all = "snake_case")]
 pub fn log_message(message: String) {
     crate::log(&message);
 }
+
+pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Value, String> {
+ match command {
+"get_state" => {  serde_json::to_value(get_state(app.clone())).map_err(|e| e.to_string()) },
+"toggle_annotating" => {  serde_json::to_value(toggle_annotating(app.clone())).map_err(|e| e.to_string()) },
+"server_control" => { let action: String = serde_json::from_value(args["action"].clone()).map_err(|e| format!("action: {e}"))?; serde_json::to_value(server_control(app.clone(), action).await?).map_err(|e| e.to_string()) },
+"show_server_log" => {  serde_json::to_value(show_server_log(app.clone())?).map_err(|e| e.to_string()) },
+"open_server" => {  serde_json::to_value(open_server(app.clone())?).map_err(|e| e.to_string()) },
+"open_settings" => { let tab: Option<String> = serde_json::from_value(args["tab"].clone()).map_err(|e| format!("tab: {e}"))?; serde_json::to_value(open_settings(app.clone(), tab)).map_err(|e| e.to_string()) },
+"open_onboarding" => {  serde_json::to_value(open_onboarding(app.clone())).map_err(|e| e.to_string()) },
+"open_annotation" => { let id: String = serde_json::from_value(args["id"].clone()).map_err(|e| format!("id: {e}"))?; serde_json::to_value(open_annotation(app.clone(), id)?).map_err(|e| e.to_string()) },
+"clear_open" => {  serde_json::to_value(clear_open(app.clone()).await).map_err(|e| e.to_string()) },
+"retry_now" => {  serde_json::to_value(retry_now(app.clone())).map_err(|e| e.to_string()) },
+"show_failed" => {  serde_json::to_value(show_failed(app.clone())?).map_err(|e| e.to_string()) },
+"conn_start" => { let project_id: String = serde_json::from_value(args["projectId"].clone()).map_err(|e| format!("projectId: {e}"))?; serde_json::to_value(conn_start(app.clone(), project_id).await?).map_err(|e| e.to_string()) },
+"conn_open" => { let project_id: String = serde_json::from_value(args["projectId"].clone()).map_err(|e| format!("projectId: {e}"))?; serde_json::to_value(conn_open(app.clone(), project_id).await?).map_err(|e| e.to_string()) },
+"conn_pairing_url" => {  serde_json::to_value(conn_pairing_url(app.clone()).await?).map_err(|e| e.to_string()) },
+"copy_prompt" => { let scope: String = serde_json::from_value(args["scope"].clone()).map_err(|e| format!("scope: {e}"))?; serde_json::to_value(copy_prompt(app.clone(), scope)?).map_err(|e| e.to_string()) },
+"hide_menu" => {  serde_json::to_value(hide_menu(app.clone())).map_err(|e| e.to_string()) },
+"quit_app" => {  serde_json::to_value(quit_app(app.clone())).map_err(|e| e.to_string()) },
+"resize_menu" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_menu(app.clone(), height)).map_err(|e| e.to_string()) },
+"submit_comment" => { let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; serde_json::to_value(submit_comment(app.clone(), text)?).map_err(|e| e.to_string()) },
+"cancel_comment" => {  serde_json::to_value(cancel_comment(app.clone())).map_err(|e| e.to_string()) },
+"comment_finish_done" => { let submit: bool = serde_json::from_value(args["submit"].clone()).map_err(|e| format!("submit: {e}"))?; let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; let keep: Option<bool> = serde_json::from_value(args["keep"].clone()).map_err(|e| format!("keep: {e}"))?; serde_json::to_value(comment_finish_done(app.clone(), submit, text, keep)).map_err(|e| e.to_string()) },
+"resize_comment" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_comment(app.clone(), height)).map_err(|e| e.to_string()) },
+"ofide" => { let action: String = serde_json::from_value(args["action"].clone()).map_err(|e| format!("action: {e}"))?; serde_json::to_value(ofide(app.clone(), action).await?).map_err(|e| e.to_string()) },
+"alert" => { let title: String = serde_json::from_value(args["title"].clone()).map_err(|e| format!("title: {e}"))?; let message: String = serde_json::from_value(args["message"].clone()).map_err(|e| format!("message: {e}"))?; serde_json::to_value(alert(app.clone(), title, message)).map_err(|e| e.to_string()) },
+"get_settings" => {  serde_json::to_value(get_settings(app.clone())).map_err(|e| e.to_string()) },
+"save_settings" => { let settings: Settings = serde_json::from_value(args["settings"].clone()).map_err(|e| format!("settings: {e}"))?; serde_json::to_value(save_settings(app.clone(), settings)?).map_err(|e| e.to_string()) },
+"hotkey_recording" => { let recording: bool = serde_json::from_value(args["recording"].clone()).map_err(|e| format!("recording: {e}"))?; serde_json::to_value(hotkey_recording(app.clone(), recording)).map_err(|e| e.to_string()) },
+"conn_save_connection" => { let endpoint: String = serde_json::from_value(args["endpoint"].clone()).map_err(|e| format!("endpoint: {e}"))?; let token: String = serde_json::from_value(args["token"].clone()).map_err(|e| format!("token: {e}"))?; serde_json::to_value(conn_save_connection(app.clone(), endpoint, token)?).map_err(|e| e.to_string()) },
+"conn_token_saved" => { let endpoint: String = serde_json::from_value(args["endpoint"].clone()).map_err(|e| format!("endpoint: {e}"))?; serde_json::to_value(conn_token_saved(endpoint)).map_err(|e| e.to_string()) },
+"get_projects" => {  serde_json::to_value(get_projects(app.clone())).map_err(|e| e.to_string()) },
+"save_projects" => { let routes: Routes = serde_json::from_value(args["routes"].clone()).map_err(|e| format!("routes: {e}"))?; serde_json::to_value(save_projects(app.clone(), routes)).map_err(|e| e.to_string()) },
+"last_target_app" => {  serde_json::to_value(last_target_app(app.clone())).map_err(|e| e.to_string()) },
+"request_permission" => { let kind: String = serde_json::from_value(args["kind"].clone()).map_err(|e| format!("kind: {e}"))?; serde_json::to_value(request_permission(app.clone(), kind)?).map_err(|e| e.to_string()) },
+"open_privacy" => { let kind: String = serde_json::from_value(args["kind"].clone()).map_err(|e| format!("kind: {e}"))?; serde_json::to_value(open_privacy(kind)?).map_err(|e| e.to_string()) },
+"relaunch" => {  serde_json::to_value(relaunch(app.clone())).map_err(|e| e.to_string()) },
+"get_permissions" => {  serde_json::to_value(get_permissions(app.clone()).await).map_err(|e| e.to_string()) },
+"get_queue" => {  serde_json::to_value(get_queue(app.clone())).map_err(|e| e.to_string()) },
+"get_screenshot" => { let id: String = serde_json::from_value(args["id"].clone()).map_err(|e| format!("id: {e}"))?; serde_json::to_value(get_screenshot(app.clone(), id).await).map_err(|e| e.to_string()) },
+"delete_annotation" => { let id: String = serde_json::from_value(args["id"].clone()).map_err(|e| format!("id: {e}"))?; serde_json::to_value(delete_annotation(app.clone(), id).await?).map_err(|e| e.to_string()) },
+"helper" => { let command: Value = serde_json::from_value(args["command"].clone()).map_err(|e| format!("command: {e}"))?; serde_json::to_value(helper(app.clone(), command)?).map_err(|e| e.to_string()) },
+"log_message" => { let message: String = serde_json::from_value(args["message"].clone()).map_err(|e| format!("message: {e}"))?; serde_json::to_value(log_message(message)).map_err(|e| e.to_string()) },
+"comment_origin" => {
+    let target = serde_json::from_value(args["target"].clone()).map_err(|e| e.to_string())?;
+    let screens: Vec<crate::geometry::Screen> = serde_json::from_value(args["screens"].clone()).map_err(|e| e.to_string())?;
+    let mouse: (f64, f64) = serde_json::from_value(args["mouse"].clone()).map_err(|e| e.to_string())?;
+    let size: (f64, f64) = serde_json::from_value(args["size"].clone()).map_err(|e| e.to_string())?;
+    Ok(json!(crate::geometry::comment_origin(target, &screens, mouse, size)))
+},
+"menu_opened" => { app::menu_opened(&app); Ok(Value::Null) },
+"hotkey_pressed" => { app::hotkey_pressed(&app, if args["slot"] == 2 { crate::hotkey::Slot::Escape } else { crate::hotkey::Slot::Toggle }); Ok(Value::Null) },
+"hotkey_error" => { shared(&app).core.lock().unwrap().hotkey_error = args["message"].as_str().map(str::to_owned); app::emit_state(&app); Ok(Value::Null) },
+_ => Err(format!("Unknown command: {command}")),
+} }

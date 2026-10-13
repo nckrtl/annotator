@@ -27,7 +27,7 @@ struct Inner {
     /// The generation a download runs for. One at a time: a second caller asks for one more pass.
     refreshing: Option<u64>,
     needs_refresh: bool,
-    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 type Callback = Box<dyn Fn() + Send + Sync>;
@@ -77,7 +77,7 @@ impl QueueMonitor {
         (self.on_change)();
         let Some(client) = client else { return };
         let monitor = self.clone();
-        let task = tauri::async_runtime::spawn(async move { monitor.run(client, generation).await });
+        let task = crate::runtime::spawn(async move { monitor.run(client, generation).await });
         let mut inner = self.inner.lock().unwrap();
         if inner.generation == generation {
             inner.task = Some(task);
@@ -90,7 +90,7 @@ impl QueueMonitor {
         let Some(client) = client else { return };
         let generation = self.inner.lock().unwrap().generation;
         let monitor = self.clone();
-        tauri::async_runtime::spawn(async move { monitor.refresh(&client, generation).await });
+        crate::runtime::spawn(async move { monitor.refresh(&client, generation).await });
     }
 
     async fn run(&self, client: AnnotationClient, generation: u64) {

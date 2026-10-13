@@ -10,9 +10,8 @@ Coding agents claim the queue, make the change, and mark each item done.
 It is the system-wide version of the web annotator. It works on native apps,
 Electron apps, browsers and anything else on screen.
 
-Phase 1 is built: a Tauri 2 app with React views, a Rust core and a Swift
-helper, on Ofide's stack (`~/apps/ofide/mac`). Read this file before you
-change anything.
+The app uses SwiftUI on DesignKit, a Rust service process and a Swift capture
+helper. Read this file before you change it.
 
 ## Status and scope
 
@@ -21,7 +20,8 @@ change anything.
   and the release rules.
 - The web package lives in `packages/annotator`. Do not change it from here.
   This app only talks to its server over HTTP.
-- Phase 1 is done. Ask the user before you start phase 2.
+- The current app includes project routing and Conn sessions. Preserve them.
+- The UI conversion is authorized. No webview is needed in the Mac app.
 
 ## Users and principles
 
@@ -77,7 +77,7 @@ change anything.
    button: see Dictation.
 6. **Capture.** Use ScreenCaptureKit, with `SCScreenshotManager` and an
    `SCContentFilter` for the display. Capture the element frame plus a 24pt
-   margin, and also the full window in phase 2. Exclude this app's own windows
+   margin. Exclude this app's own windows
    from the filter, so the overlay and panel are not in the image. Encode as
    JPEG (quality about 0.8) and downscale if needed to keep the request under
    the server's 10 MiB limit. Capture right before you show the comment panel,
@@ -155,7 +155,7 @@ existing agents already read; keep their meaning. The `native` object is new.
 - `url`: the web page URL when the element is web content (`AXURL` of the web
   area), otherwise `app://<bundleId>`. `pathname`: the window title.
 - `mode`: `element`, `window` (fallback) or `region`.
-- `project`: set in phase 2 by routing; null until then.
+- `project`: the name of the first matching route, or Inbox when none matches.
 
 ## Dictation
 
@@ -183,101 +183,114 @@ full API. If Ofide is not running, show that next to the button.
 - The global hotkey uses Carbon `RegisterEventHotKey`, which needs no
   permission. Do not use a `CGEventTap`; it would need Input Monitoring.
 
-## Tech and layout
+## UI decisions (DesignKit conversion)
 
-Ofide's stack and layout, so code copies between the two apps:
+Follow `~/apps/design-kit/DESIGN.md` draft 2. DesignKit requires macOS 26.
+The local package is `~/apps/design-kit/DesignKit`; set `DESIGN_KIT_PATH` to
+use another checkout. Do not copy its controls into this repository.
+
+- Library and detail: one SwiftUI `Window`, hidden title bar, `KitWindowChrome`,
+  `KitShell` with a 220 pt sidebar, a 300 pt list and a detail column. The default
+  size and minimum size come from DesignKit. Screenshots are native images.
+- Settings and Projects: pages in the shell, not separate windows. Settings
+  uses `KitGroup` and `KitRow`. The project editor is a `KitSheet`.
+- Menu: SwiftUI `MenuBarExtra` with window style. Library, Projects and Settings
+  provide the full queue, server and agent controls.
+- Comment: SwiftUI hosted in a key-capable AppKit `NSPanel`, above the capture
+  overlay and visible over full-screen apps. `NSTextView` preserves input methods,
+  Ofide paste, Return to submit, Shift-Return for a line, and Escape to cancel.
+- Permissions: a frosted SwiftUI prompt in an AppKit window.
+- Overlay: keep the existing AppKit panels, hit testing, region selection and
+  ScreenCaptureKit capture. Its neutral outline has a contrasting halo, so it
+  stays visible on arbitrary content. It is desktop content, not a web page.
+- Browser annotation canvas: stays in the independent npm package. The Mac app
+  only exchanges records with its HTTP server. No package imports.
+- No Mac surface is a web page, so Tauri and React are removed from the Mac app.
+- Notices always sit inside a `KitGroup`, with primary text. Only the icon
+  carries warning or error color; never use tinted notice boxes.
+- Identity: a neutral pencil mark with an annotation dot; numbered tiles recur
+  in the library. Controls, spacing, type and shell come from DesignKit.
 
 ```
-src/                  # React views, one Vite entry; the window label picks the view
-  ui.tsx, ui.css      # copies of Ofide's components and tokens: keep them identical
-  components.tsx      # generic components that can move to Ofide
-  menu/ comment/ settings/ onboarding/ detail/
-src-tauri/            # Rust core: all state and I/O (server, queue, retry store,
-                      # projects, Conn, Ofide, hotkey, panels, windows)
-native/               # Swift helper `annotator-native`: Accessibility, overlay,
-                      # hit test, capture, DevTools DOM lookup (SwiftPM)
-scripts/              # build, sign, install, test, Conn headless server
-docs/port.md          # the contract between the three parts
+app/                  # SwiftPM: AnnotatorApp (SwiftUI/AppKit), AnnotatorCore (Foundation)
+src-tauri/            # historical directory name; now a plain Rust executable, no Tauri
+native/               # Swift capture helper and its UI-free record/geometry target
+scripts/              # build, sign, install, test, UI snapshots, Conn server
+Snapshots/designkit/  # generated light/dark UI captures (ignored by git)
+docs/port.md          # process contracts
 ```
 
-- Rust and the helper talk in JSON lines (`docs/port.md` §1). React talks to
-  Rust with `invoke` commands and `state` events (§2).
-- The menu and comment panels are webviews in native `NSPanel`s
-  (`src-tauri/src/panels.rs`), so they open over full-screen apps and the
-  comment field can take Ofide's paste.
-- Windows use Ofide's shell: no title bar, a vibrant sidebar, the title on the
-  right, resizable.
-- The global hotkey uses Carbon `RegisterEventHotKey`; no `CGEventTap`.
-- Bundle id: `com.nckrtl.annotator`. `LSUIElement` true. Minimum macOS 15.
-  The helper is in `Contents/Resources/annotator-native` and runs under the
-  app's permission grants.
-- Keep `ui.tsx` and `ui.css` identical to Ofide's; put app styles in
-  `src/app.css`. Compare with
-  `diff ~/apps/ofide/mac/src/ui.tsx src/ui.tsx`.
+Rust keeps settings, HTTP, SSE/polling, queue, pending/retry storage, routing,
+Conn, Keychain and Ofide serialization. It imports neither SwiftUI nor AppKit.
+`AnnotatorCore` keeps JSON framing, the pipe client and dictation lifecycle;
+it imports neither SwiftUI nor AppKit. Only the UI target owns windows, Carbon
+shortcuts, focus and file pickers.
 
-## Build
+The SwiftUI host starts `Contents/Resources/annotator-core` over inherited
+stdin/stdout pipes. The core starts `annotator-native` beside it. No network
+listener is added. `ANNOTATOR_HOST_PID` tells the helper to exclude all three
+processes from hit testing and capture. Closing the host's pipe stops the core
+and its helper. A core failure is visible and fails all outstanding requests.
 
-```bash
-bun install
-scripts/test.sh            # swift test (native), cargo test, tsc, bun test
-scripts/install.sh         # builds, signs, installs /Applications/Annotator.app, starts it
+Bundle id stays `com.nckrtl.annotator`; `LSUIElement` remains true. Settings,
+project routes, pending comments and tokens keep their existing locations.
+
+## Build and install
+
+```sh
+bun install --frozen-lockfile
+bun run build                  # type-check and build SwiftUI
+scripts/test.sh                # helper, Rust, bridge and dictation tests
+scripts/build-app.sh --debug   # build/debug/Annotator.app; ad-hoc signing
+scripts/build-app.sh           # build/release/Annotator.app; Nick's identity
+scripts/install.sh             # Nick's Mac only, only when explicitly asked
 ```
 
-`scripts/build-app.sh` builds the helper (`scripts/build-native.sh`), runs
-`bun run tauri build`, and signs inside out (`scripts/sign-app.sh`): the
-helper, then the app, with the hardened runtime. The identity is in
-`scripts/signing.sh`: `Apple Development: Nick Retel (G9Y9TT23QF)`, or
-`SIGNING_IDENTITY`. The build fails if the identity is missing. Over SSH the
-login keychain is locked (`errSecInternalComponent`); unlock it first or sign
-locally.
+Builds copy DesignKit and Phosphor resource bundles, the Rust core and the capture
+helper into the app. `sign-app.sh` signs the two child executables before signing
+the app with the hardened runtime. The identity remains
+`Apple Development: Nick Retel (G9Y9TT23QF)`, or `SIGNING_IDENTITY`.
+An unsigned/ad-hoc VM build does not inherit Nick's permission grants.
+The app is not sandboxed. Entitlements stay empty.
 
-The app is not sandboxed: accessibility of other apps does not work in the
-sandbox. Entitlements stay empty.
+`install.sh` builds the signed release, replaces `/Applications/Annotator.app`,
+registers it and starts it. Do not run it on the VM. Do not reset privacy grants
+or change signing identities as a shortcut for testing.
 
-macOS keeps the Accessibility and Screen Recording grants for this bundle id
-and certificate. After a signing identity change, reset them with
-`tccutil reset Accessibility com.nckrtl.annotator` and
-`tccutil reset ScreenCapture com.nckrtl.annotator`, then grant again.
+CI checks out the private DesignKit repository using `DESIGN_KIT_TOKEN` (a
+read-only repository secret), and sets `DESIGN_KIT_PATH` to that checkout.
+
+## Verification
+
+- `scripts/test.sh`: capture geometry and redaction; Rust HTTP/queue/retry,
+  routing, Conn and Ofide; Swift pipe framing and dictation races.
+- `scripts/smoke-core.py`: real Rust core, temporary home and loopback server,
+  controlled helper fixture. Tests saved settings, permission and hotkey events,
+  capture-to-submit, routing, screenshots, live queue, offline retry, deletion,
+  malformed commands and cleanup on EOF. No user data or server is used.
+- `scripts/snapshots.sh [absolute-output-directory]`: debug-only demo data;
+  no helpers, servers or user settings. Captures every page, panel, editor,
+  empty/error state and minimum-size layout in light and dark. ScreenCaptureKit’s
+  current-process API captures the actual windows, including glass and native
+  chrome, without a Screen Recording grant.
+- Real capture and dictation still require granted macOS permissions and a
+  running Ofide. Check hover/click, Option-drag, Escape, paste-before-submit,
+  multi-display placement and full-screen panels on a signed installation.
 
 Logs: `~/Library/Logs/Annotator/annotator.log`. Settings:
 `~/Library/Application Support/com.nckrtl.annotator/settings.json`.
 
-## Testing
+## Original delivery phases
 
-- `scripts/test.sh` runs every suite:
-  - `swift test --package-path native`: coordinates on multi-screen layouts,
-    element labels, record encoding, screenshot size limits, DOM redaction.
-  - `cargo test` in `src-tauri`: server client (201/200/410/413/5xx), queue,
-    retry store, projects and prompt text, Conn, Ofide, panel placement,
-    URL and id checks.
-  - `bunx tsc -b` and `bun test scripts/`: hotkey, dictation state machine,
-    menu sections.
-- For layout work without the app, run `bun run dev` and open
-  `http://127.0.0.1:1430/preview.html?window=menu` (also `comment`,
-  `settings`, `onboarding`, `detail-<id>`). It mocks the Rust side.
-- Manual checks, with a server running:
-  1. A native app (Finder, Mail or System Settings): hover shows tight
-     highlights; a click posts a record with a real `ax.path`.
-  2. An Electron app (Conn, Slack or VS Code): elements resolve after the
-     first hover (`AXManualAccessibility`).
-  3. A web page in Safari or Chrome: `url` is the page URL.
-  4. A second monitor, if connected: highlight and crop line up.
-  5. Server stopped: the panel says so and the comment is not lost.
-  6. Permissions revoked: onboarding appears and says what is missing.
-- Check the posted record with `curl -s http://127.0.0.1:29703/annotations`
-  and open the screenshot data URL to confirm the crop.
-
-## Phases
-
-**Phase 1 (build this first):** menu bar item, hotkey, permission onboarding,
+Phase 1 is implemented: menu bar item, hotkey, permission onboarding,
 overlay with element highlight and window fallback, region mode, comment panel,
 capture, POST with local retry, live queue counts in the menu, settings
 (server URL, hotkey, Ofide URL). Dictation button if it stays small.
 
-**Phase 2 (after user feedback):**
+Possible follow-ups (project routing is already implemented):
 - Pins: numbered markers for open annotations, shown on the overlay over the
   window they belong to (store window id and the position relative to the
-  window). Hide them when that window is not on screen; accept ofide when
+  window). Hide them when that window is not on screen; hide them when
   content moves.
 - Project routing: rules in `~/.config/annotator/routes.json` map bundle id,
   window title pattern or URL prefix to a project name and root folder. Set

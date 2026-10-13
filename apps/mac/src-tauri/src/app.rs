@@ -15,7 +15,7 @@ use crate::{helper, panels, windows};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
+
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +59,6 @@ pub struct Core {
     pub helper_error: Option<String>,
     /// Open the Screen Recording pane when the next answer still lacks the permission.
     pub screen_pane_pending: bool,
-    pub tray_active: Option<bool>,
     /// The queue connection last used to decide whether to ask the local server if it runs.
     pub server_watch: Option<Connection>,
 }
@@ -73,21 +72,21 @@ pub struct Shared {
     pub permission_waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Permissions>>>,
 }
 
-pub fn shared(app: &tauri::AppHandle) -> tauri::State<'_, Shared> {
+pub fn shared(app: &crate::runtime::AppHandle) -> Arc<Shared> {
     app.state::<Shared>()
 }
 
-fn with<T>(app: &tauri::AppHandle, f: impl FnOnce(&mut Core) -> T) -> T {
+fn with<T>(app: &crate::runtime::AppHandle, f: impl FnOnce(&mut Core) -> T) -> T {
     let state = shared(app);
     let mut core = state.core.lock().unwrap();
     f(&mut core)
 }
 
-pub fn settings(app: &tauri::AppHandle) -> Settings {
+pub fn settings(app: &crate::runtime::AppHandle) -> Settings {
     with(app, |core| core.settings.clone())
 }
 
-pub fn client(app: &tauri::AppHandle) -> Option<AnnotationClient> {
+pub fn client(app: &crate::runtime::AppHandle) -> Option<AnnotationClient> {
     settings(app).server().map(AnnotationClient::new)
 }
 
@@ -97,7 +96,7 @@ fn local_server(settings: &Settings) -> Option<LocalServer> {
 
 // MARK: - Setup
 
-pub fn setup(app: &tauri::AppHandle) {
+pub fn setup(app: &crate::runtime::AppHandle) {
     let settings = Settings::load(&Settings::file());
     let on_change = app.clone();
     let submitter = Arc::new(Submitter::new(PendingStore::standard(), move || emit_state(&on_change)));
@@ -105,7 +104,7 @@ pub fn setup(app: &tauri::AppHandle) {
     let reachable = app.clone();
     let queue = QueueMonitor::new(move || queue_changed(&changed), move || {
         let app = reachable.clone();
-        tauri::async_runtime::spawn(async move { retry_pending(&app).await });
+        crate::runtime::spawn(async move { retry_pending(&app).await });
     });
     app.manage(Shared {
         core: Mutex::new(Core {
@@ -121,7 +120,6 @@ pub fn setup(app: &tauri::AppHandle) {
             last_target: None,
             helper_error: None,
             screen_pane_pending: false,
-            tray_active: None,
             server_watch: None,
         }),
         queue,
@@ -140,10 +138,10 @@ pub fn setup(app: &tauri::AppHandle) {
     register_hotkey(app);
     shared(app).queue.start(client(app));
     let retry = app.clone();
-    tauri::async_runtime::spawn(async move { retry_pending(&retry).await });
+    crate::runtime::spawn(async move { retry_pending(&retry).await });
     // Retries a nudge for a session that was busy.
     let timer = app.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(15)).await;
             if let Some((open, projects)) = shared(&timer).conn.latest() {
@@ -154,17 +152,8 @@ pub fn setup(app: &tauri::AppHandle) {
     emit_state(app);
 }
 
-fn settings_auto_start(app: &tauri::AppHandle) -> bool {
+fn settings_auto_start(app: &crate::runtime::AppHandle) -> bool {
     with(app, |core| core.settings.server_auto_start)
-}
-
-/// Opening the app again shows a window, in case the menu bar hides the icon.
-pub fn reopen(app: &tauri::AppHandle) {
-    if with(app, |core| core.permissions.all()) {
-        windows::open_settings(app, None);
-    } else {
-        windows::open_onboarding(app);
-    }
 }
 
 // MARK: - State
@@ -188,7 +177,7 @@ pub fn health(connection: &Connection, pending: usize, failed: usize, permission
     ("ok", if *connection == Connection::Live { "Connected".into() } else { "Connected · polling every 3 s".into() })
 }
 
-pub fn app_state(app: &tauri::AppHandle) -> Value {
+pub fn app_state(app: &crate::runtime::AppHandle) -> Value {
     let state = shared(app);
     let connection = state.queue.connection();
     let summary = state.queue.summary();
@@ -229,45 +218,19 @@ pub fn app_state(app: &tauri::AppHandle) -> Value {
 }
 
 /// Emits `state` to every window and updates the menu bar item.
-pub fn emit_state(app: &tauri::AppHandle) {
+pub fn emit_state(app: &crate::runtime::AppHandle) {
     if app.try_state::<Shared>().is_none() {
         return;
     }
     let state = app_state(app);
     let _ = app.emit("state", &state);
-    update_tray(app, &state);
 }
 
-fn update_tray(app: &tauri::AppHandle, state: &Value) {
-    let Some(tray) = app.tray_by_id("annotator") else { return };
-    let open = state["queue"]["todo"].as_u64().unwrap_or(0) + state["queue"]["inProgress"].as_u64().unwrap_or(0);
-    let _ = tray.set_title(if open > 0 { Some(open.to_string()) } else { None });
-    let _ = tray.set_tooltip(Some(format!("Annotator: {}", state["health"]["title"].as_str().unwrap_or_default())));
-    let active = state["annotating"].as_bool().unwrap_or(false);
-    let changed = with(app, |core| {
-        let changed = core.tray_active != Some(active);
-        core.tray_active = Some(active);
-        changed
-    });
-    if changed {
-        let bytes: &[u8] = if active { include_bytes!("../icons/tray-active.png") } else { include_bytes!("../icons/tray.png") };
-        if let Ok(icon) = tauri::image::Image::from_bytes(bytes) {
-            let _ = tray.set_icon(Some(icon));
-            let _ = tray.set_icon_as_template(true);
-        }
-    }
-}
 
 /// The queue or the connection changed.
-fn queue_changed(app: &tauri::AppHandle) {
+fn queue_changed(app: &crate::runtime::AppHandle) {
     emit_state(app);
-    let detail_windows = app.webview_windows().keys().any(|label| label.starts_with("detail-"));
-    if detail_windows {
-        let items = shared(app).queue.items();
-        let _ = app.emit_filter("queue", items, |target| {
-            matches!(target, tauri::EventTarget::WebviewWindow { label } if label.starts_with("detail-"))
-        });
-    }
+    let _ = app.emit("queue", shared(app).queue.items());
     // Ask the local server only when the connection changes, not on every queue event.
     let connection = shared(app).queue.connection();
     let changed = with(app, |core| {
@@ -285,9 +248,9 @@ fn queue_changed(app: &tauri::AppHandle) {
     }
 }
 
-fn nudge(app: &tauri::AppHandle, open: Vec<Value>, projects: Vec<crate::projects::Project>) {
+fn nudge(app: &crate::runtime::AppHandle, open: Vec<Value>, projects: Vec<crate::projects::Project>) {
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::runtime::spawn(async move {
         let conn = shared(&app).conn.clone();
         let previous = conn.last_error();
         let settings = settings(&app);
@@ -305,7 +268,7 @@ fn nudge(app: &tauri::AppHandle, open: Vec<Value>, projects: Vec<crate::projects
     });
 }
 
-pub async fn retry_pending(app: &tauri::AppHandle) {
+pub async fn retry_pending(app: &crate::runtime::AppHandle) {
     let submitter = shared(app).submitter.clone();
     submitter.retry_pending(client(app)).await;
 }
@@ -313,10 +276,8 @@ pub async fn retry_pending(app: &tauri::AppHandle) {
 // MARK: - System helpers
 
 /// A native alert. Annotator activates first, as an accessory app.
-pub fn alert(app: &tauri::AppHandle, title: &str, message: &str) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-    panels::activate(app);
-    app.dialog().message(message).title(title).kind(MessageDialogKind::Warning).show(|_| {});
+pub fn alert(app: &crate::runtime::AppHandle, title: &str, message: &str) {
+    let _ = app.emit("alert", json!({"title": title, "message": message}));
 }
 
 pub fn copy(text: &str) -> Result<(), String> {
@@ -337,7 +298,7 @@ pub fn open(target: &str) -> Result<(), String> {
 // MARK: - Local server
 
 /// Reads whether the local server runs; with `auto_start`, starts it unless another server answers.
-pub fn refresh_server_status(app: &tauri::AppHandle, auto_start: bool) {
+pub fn refresh_server_status(app: &crate::runtime::AppHandle, auto_start: bool) {
     let server = with(app, |core| {
         let server = local_server(&core.settings).filter(|_| !core.server.busy)?;
         core.server.busy = true;
@@ -345,7 +306,7 @@ pub fn refresh_server_status(app: &tauri::AppHandle, auto_start: bool) {
     });
     let Some(server) = server else { return };
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::runtime::spawn(async move {
         let result = async {
             let status = server.run("status").await?;
             let same = || local_server(&settings(&app)).is_some_and(|s| s.state() == server.state());
@@ -378,7 +339,7 @@ pub fn refresh_server_status(app: &tauri::AppHandle, auto_start: bool) {
 }
 
 /// `start`, `stop` or `restart`.
-pub async fn server_control(app: &tauri::AppHandle, command: &str) -> Result<(), String> {
+pub async fn server_control(app: &crate::runtime::AppHandle, command: &str) -> Result<(), String> {
     if !matches!(command, "start" | "stop" | "restart") {
         return Err(format!("Unknown server action: {command}"));
     }
@@ -415,14 +376,14 @@ pub async fn server_control(app: &tauri::AppHandle, command: &str) -> Result<(),
     outcome
 }
 
-pub fn show_server_log(app: &tauri::AppHandle) -> Result<(), String> {
+pub fn show_server_log(app: &crate::runtime::AppHandle) -> Result<(), String> {
     let server = local_server(&settings(app)).ok_or("Start and stop are available for a local HTTP server.")?;
     open(&server.log().to_string_lossy())
 }
 
 // MARK: - Hotkeys
 
-pub fn register_hotkey(app: &tauri::AppHandle) {
+pub fn register_hotkey(app: &crate::runtime::AppHandle) {
     let hotkey = settings(app).hotkey;
     let error = hotkey::register(app, Slot::Toggle, hotkey.key_code, hotkey.modifiers)
         .map(|message| format!("{}: {message}", hotkey.display()));
@@ -435,11 +396,11 @@ pub fn register_hotkey(app: &tauri::AppHandle) {
 
 /// Esc is a global hotkey while hovering, so it works without taking focus from the app underneath.
 /// It is released while the comment panel is open, so Esc reaches the panel.
-fn register_escape(app: &tauri::AppHandle) {
+fn register_escape(app: &crate::runtime::AppHandle) {
     let _ = hotkey::register(app, Slot::Escape, 53, 0);
 }
 
-pub fn hotkey_pressed(app: &tauri::AppHandle, slot: Slot) {
+pub fn hotkey_pressed(app: &crate::runtime::AppHandle, slot: Slot) {
     match slot {
         Slot::Toggle => toggle(app),
         Slot::Escape => stop_annotating(app),
@@ -448,11 +409,11 @@ pub fn hotkey_pressed(app: &tauri::AppHandle, slot: Slot) {
 
 // MARK: - Annotate mode
 
-pub fn toggle(app: &tauri::AppHandle) {
+pub fn toggle(app: &crate::runtime::AppHandle) {
     if with(app, |core| core.annotating) { stop_annotating(app) } else { start_annotating(app) }
 }
 
-fn start_annotating(app: &tauri::AppHandle) {
+fn start_annotating(app: &crate::runtime::AppHandle) {
     if !with(app, |core| core.permissions.all()) {
         let _ = helper::send(app, &json!({"action": "permissions"}));
         windows::open_onboarding(app);
@@ -469,7 +430,7 @@ fn start_annotating(app: &tauri::AppHandle) {
     emit_state(app);
 }
 
-pub fn stop_annotating(app: &tauri::AppHandle) {
+pub fn stop_annotating(app: &crate::runtime::AppHandle) {
     drop_comment(app);
     let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
     with(app, |core| core.annotating = false);
@@ -478,7 +439,7 @@ pub fn stop_annotating(app: &tauri::AppHandle) {
 }
 
 /// Closes the comment panel without resuming the overlay; the view cancels Ofide.
-fn drop_comment(app: &tauri::AppHandle) {
+fn drop_comment(app: &crate::runtime::AppHandle) {
     let had = with(app, |core| {
         core.moving = None;
         core.comment.take().is_some()
@@ -491,7 +452,7 @@ fn drop_comment(app: &tauri::AppHandle) {
 
 // MARK: - Helper events
 
-pub fn helper_event(app: &tauri::AppHandle, event: Value) {
+pub fn helper_event(app: &crate::runtime::AppHandle, event: Value) {
     if app.try_state::<Shared>().is_none() {
         return;
     }
@@ -524,7 +485,7 @@ pub fn helper_event(app: &tauri::AppHandle, event: Value) {
 }
 
 /// The helper stopped: the overlay is gone, so annotate mode ends.
-pub fn helper_stopped(app: &tauri::AppHandle, message: Option<String>) {
+pub fn helper_stopped(app: &crate::runtime::AppHandle, message: Option<String>) {
     if app.try_state::<Shared>().is_none() {
         return;
     }
@@ -537,7 +498,7 @@ pub fn helper_stopped(app: &tauri::AppHandle, message: Option<String>) {
     emit_state(app);
 }
 
-fn permissions_changed(app: &tauri::AppHandle, permissions: Permissions) {
+fn permissions_changed(app: &crate::runtime::AppHandle, permissions: Permissions) {
     let (first, open_pane) = with(app, |core| {
         let first = !core.permissions_known;
         core.permissions_known = true;
@@ -559,7 +520,7 @@ fn permissions_changed(app: &tauri::AppHandle, permissions: Permissions) {
 }
 
 /// Asks the helper and waits up to 2 s; the last known answer otherwise.
-pub async fn fresh_permissions(app: &tauri::AppHandle) -> Permissions {
+pub async fn fresh_permissions(app: &crate::runtime::AppHandle) -> Permissions {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     shared(app).permission_waiters.lock().unwrap().push(sender);
     if helper::send(app, &json!({"action": "permissions"})).is_ok() {
@@ -577,7 +538,7 @@ pub fn privacy_url(kind: &str) -> String {
 
 /// Accessibility: prompt, which adds Annotator to the list, and open the pane. Screen Recording:
 /// request, and open the pane when macOS does not grant it.
-pub fn request_permission(app: &tauri::AppHandle, kind: &str) -> Result<(), String> {
+pub fn request_permission(app: &crate::runtime::AppHandle, kind: &str) -> Result<(), String> {
     if kind == "accessibility" {
         helper::send(app, &json!({"action": "requestAccessibility"}))?;
         open(&privacy_url(kind))
@@ -589,7 +550,7 @@ pub fn request_permission(app: &tauri::AppHandle, kind: &str) -> Result<(), Stri
 
 // MARK: - Comment
 
-fn selected(app: &tauri::AppHandle, event: Value) {
+fn selected(app: &crate::runtime::AppHandle, event: Value) {
     hotkey::unregister(app, Slot::Escape);
     let Some(record) = event.get("record").filter(|r| r.is_object()).cloned() else {
         crate::log("The helper sent a selection without a record.");
@@ -623,7 +584,7 @@ fn selected(app: &tauri::AppHandle, event: Value) {
 }
 
 /// The panel closed: hover again, and take Esc back.
-fn comment_closed(app: &tauri::AppHandle) {
+fn comment_closed(app: &crate::runtime::AppHandle) {
     panels::hide_comment(app);
     let annotating = with(app, |core| {
         core.moving = None;
@@ -637,7 +598,7 @@ fn comment_closed(app: &tauri::AppHandle) {
 }
 
 /// Closes the panel at once and posts in the background. The menu shows the result.
-pub fn submit_comment(app: &tauri::AppHandle, text: &str) -> Result<(), String> {
+pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str) -> Result<(), String> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("Write a comment first.".into());
@@ -663,7 +624,7 @@ pub fn submit_comment(app: &tauri::AppHandle, text: &str) -> Result<(), String> 
     let id = record["id"].as_str().unwrap_or_default().to_string();
     let body = serde_json::to_vec(&record).map_err(|e| format!("Could not encode the record: {e}"))?;
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    crate::runtime::spawn(async move {
         let submitter = shared(&app).submitter.clone();
         let result = submitter.submit(&id, body, client(&app)).await;
         crate::log(&format!("Annotation {id}: {}", result.message()));
@@ -672,7 +633,7 @@ pub fn submit_comment(app: &tauri::AppHandle, text: &str) -> Result<(), String> 
     Ok(())
 }
 
-pub fn cancel_comment(app: &tauri::AppHandle) {
+pub fn cancel_comment(app: &crate::runtime::AppHandle) {
     if with(app, |core| core.comment.take().is_some()) {
         comment_closed(app);
     } else {
@@ -682,7 +643,7 @@ pub fn cancel_comment(app: &tauri::AppHandle) {
 
 /// Like the web annotator: a click elsewhere stops dictation, waits for the paste, submits the
 /// open comment, and opens a new one at the click. The view finishes dictation first.
-fn move_comment(app: &tauri::AppHandle, x: f64, y: f64) {
+fn move_comment(app: &crate::runtime::AppHandle, x: f64, y: f64) {
     let start = with(app, |core| {
         // A finish that never answered does not block clicks forever (a stop waits at most 125 s).
         let busy = core.moving.is_some_and(|(at, _, _)| at.elapsed() < Duration::from_secs(130));
@@ -698,7 +659,7 @@ fn move_comment(app: &tauri::AppHandle, x: f64, y: f64) {
 }
 
 /// The view finished dictation. `keep`: it failed, so the panel stays open and says why.
-pub fn comment_finish_done(app: &tauri::AppHandle, submit: bool, text: &str, keep: bool) {
+pub fn comment_finish_done(app: &crate::runtime::AppHandle, submit: bool, text: &str, keep: bool) {
     let Some((_, x, y)) = with(app, |core| core.moving.take()) else { return };
     if keep {
         return;
@@ -718,14 +679,14 @@ pub fn comment_finish_done(app: &tauri::AppHandle, submit: bool, text: &str, kee
 
 // MARK: - Menu
 
-pub fn menu_opened(app: &tauri::AppHandle) {
+pub fn menu_opened(app: &crate::runtime::AppHandle) {
     let _ = helper::send(app, &json!({"action": "permissions"}));
     with(app, |core| core.projects.reload());
     emit_state(app);
 }
 
 /// Deletes every to-do and in-progress annotation on the server. Done ones stay.
-pub async fn clear_open(app: &tauri::AppHandle) -> usize {
+pub async fn clear_open(app: &crate::runtime::AppHandle) -> usize {
     let (Some(summary), Some(client)) = (shared(app).queue.summary(), client(app)) else { return 0 };
     let mut failed = 0;
     for item in &summary.open {
@@ -737,7 +698,7 @@ pub async fn clear_open(app: &tauri::AppHandle) -> usize {
     failed
 }
 
-pub fn open_annotation(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
+pub fn open_annotation(app: &crate::runtime::AppHandle, id: &str) -> Result<(), String> {
     // Window labels allow only a-z, A-Z, 0-9, `-`, `/`, `:` and `_`; server ids are a subset.
     if !crate::annotations::is_valid_id(id) {
         return Err(format!("Not an annotation id: {id}"));
@@ -749,14 +710,12 @@ pub fn open_annotation(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn queue_changed_detail_only(app: &tauri::AppHandle) {
+fn queue_changed_detail_only(app: &crate::runtime::AppHandle) {
     let items = shared(app).queue.items();
-    let _ = app.emit_filter("queue", items, |target| {
-        matches!(target, tauri::EventTarget::WebviewWindow { label } if label.starts_with("detail-"))
-    });
+    let _ = app.emit("queue", items);
 }
 
-pub fn save_settings(app: &tauri::AppHandle, new: Settings) -> Result<Settings, String> {
+pub fn save_settings(app: &crate::runtime::AppHandle, new: Settings) -> Result<Settings, String> {
     let (old, merged) = with(app, |core| {
         let merged = core.settings.merged(new);
         (core.settings.clone(), merged)
@@ -775,18 +734,7 @@ pub fn save_settings(app: &tauri::AppHandle, new: Settings) -> Result<Settings, 
     Ok(merged)
 }
 
-pub fn relaunch(app: &tauri::AppHandle) {
-    let bundle = std::env::current_exe().ok()
-        .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf()));
-    match bundle {
-        Some(path) => {
-            let _ = std::process::Command::new("/bin/sh")
-                .args(["-c", "sleep 0.5; /usr/bin/open \"$0\""]).arg(path).spawn();
-            app.exit(0);
-        }
-        None => app.restart(),
-    }
-}
+pub fn relaunch(app: &crate::runtime::AppHandle) { let _ = app.emit("relaunch", ()); }
 
 #[cfg(test)]
 mod tests {

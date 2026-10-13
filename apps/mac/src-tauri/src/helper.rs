@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::Manager;
+
 
 pub const WINDOW: Duration = Duration::from_secs(60);
 pub const BACKOFF: [Duration; 3] = [Duration::from_millis(500), Duration::from_secs(2), Duration::from_secs(5)];
@@ -64,17 +64,12 @@ struct Inner {
 #[derive(Default)]
 pub struct Helper(Mutex<Inner>);
 
-fn binary(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // A development build runs the helper from src-tauri/binaries unless it runs as a bundle.
-    let bundled = !cfg!(debug_assertions) || std::env::var_os("ANNOTATOR_DEV_BUNDLE").is_some();
-    if bundled {
-        Ok(app.path().resource_dir().map_err(|e| e.to_string())?.join("annotator-native"))
-    } else {
-        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/annotator-native"))
-    }
+fn binary(_app: &crate::runtime::AppHandle) -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("ANNOTATOR_HELPER") { return Ok(PathBuf::from(path)); }
+    Ok(std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("annotator-native"))
 }
 
-fn launch(app: &tauri::AppHandle, generation: u64) -> Result<Running, String> {
+fn launch(app: &crate::runtime::AppHandle, generation: u64) -> Result<Running, String> {
     let path = binary(app)?;
     let mut child = Command::new(&path)
         .stdin(Stdio::piped())
@@ -111,7 +106,7 @@ fn launch(app: &tauri::AppHandle, generation: u64) -> Result<Running, String> {
 }
 
 /// The helper's output ended: restart it with backoff, unless Annotator stops it.
-fn exited(app: &tauri::AppHandle, generation: u64) {
+fn exited(app: &crate::runtime::AppHandle, generation: u64) {
     let decision = {
         let state = app.state::<Helper>();
         let mut inner = state.0.lock().unwrap();
@@ -140,7 +135,7 @@ fn exited(app: &tauri::AppHandle, generation: u64) {
 }
 
 /// Starts the helper when it is not running.
-pub fn start(app: &tauri::AppHandle) -> Result<(), String> {
+pub fn start(app: &crate::runtime::AppHandle) -> Result<(), String> {
     let state = app.state::<Helper>();
     let mut inner = state.0.lock().unwrap();
     if inner.running.is_none() && !inner.stopping {
@@ -161,14 +156,14 @@ fn write(inner: &mut Inner, command: &Value) -> Result<(), String> {
 }
 
 /// Sends one command, starting the helper first when it is not running.
-pub fn send(app: &tauri::AppHandle, command: &Value) -> Result<(), String> {
+pub fn send(app: &crate::runtime::AppHandle, command: &Value) -> Result<(), String> {
     start(app)?;
     let state = app.state::<Helper>();
     let mut inner = state.0.lock().unwrap();
     write(&mut inner, command)
 }
 
-pub fn stop(app: &tauri::AppHandle) {
+pub fn stop(app: &crate::runtime::AppHandle) {
     let state = app.state::<Helper>();
     let mut inner = state.0.lock().unwrap();
     inner.stopping = true;

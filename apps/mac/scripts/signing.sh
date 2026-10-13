@@ -10,3 +10,12 @@ require_signing_identity() {
   security find-identity -v -p codesigning >&2
   exit 1
 }
+
+# The VM stores the build identity in this dedicated keychain. Never open a GUI prompt.
+unlock_signing_keychain() {
+  local keychain="$HOME/Library/Keychains/signing.keychain-db"
+  local password_file="$HOME/.config/signing/keychain-password"
+  if [[ -f "$keychain" && -f "$password_file" ]]; then
+    security unlock-keychain -p "$(cat "$password_file")" "$keychain"
+  fi
+}
