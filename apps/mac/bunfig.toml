@@ -1,0 +1,4 @@
+[install]
+# Routine releases wait seven days; security fixes follow server/web/docs/dependency-policy.md.
+# Existing bun.lock entries are not re-resolved.
+minimumReleaseAge = 604800

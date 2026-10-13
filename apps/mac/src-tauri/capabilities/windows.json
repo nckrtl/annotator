@@ -1,0 +1,11 @@
+{
+  "identifier": "windows",
+  "description": "Settings, onboarding and annotation detail windows: events, plus closing and dragging their own window",
+  "windows": ["settings", "onboarding", "detail-*"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}
