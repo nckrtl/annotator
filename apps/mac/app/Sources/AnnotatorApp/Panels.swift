@@ -283,8 +283,10 @@ private struct MenuAnnotationRow: View {
                         Text(verbatim: Self.timestamp(item["createdAt"].double)).monospacedDigit().fixedSize()
                     }.font(.kitDetail).foregroundStyle(.secondary)
                 }.alignmentGuide(.capTop) { $0[.firstTextBaseline] - NSFont.systemFont(ofSize: 14).capHeight }
-                KitIconImage(status.icon, size: 12).foregroundStyle(.secondary).frame(width: Self.controlWidth)
-                    .alignmentGuide(.capTop) { $0[.top] }.help(status.label)
+                Group {
+                    if status.label == "In progress" { KitStatusIcon(.working, size: 16, label: status.label) }
+                    else { KitIconImage(status.icon, size: 16).foregroundStyle(.secondary) }
+                }.frame(width: Self.controlWidth).alignmentGuide(.capTop) { $0[.top] }.help(status.label)
             }
             .padding(.horizontal, Kit.columnMargin).padding(.vertical, Kit.rowInset)
             .background(hovering ? Color.kitHover : .clear)
