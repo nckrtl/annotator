@@ -53,6 +53,16 @@ import ScreenCaptureKit
         for appearance in ["light", "dark"] {
             NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
             window.appearance = NSApp.appearance
+            if ProcessInfo.processInfo.environment["ANNOTATOR_UI_CONN_CHECK"] == "1" {
+                populate(model); model.navigate("projects"); model.selectedProjectID = "website"
+                await shot(window, "\(appearance)-conn-projects", directory)
+                model.error = "Could not start a Conn session for Website: Could not read Conn's snapshot (version 0.0.46): projects[0]: missing field `workspaceRoot`."
+                try? await Task.sleep(for: .seconds(1))
+                await shot(window, "\(appearance)-conn-error", directory)
+                model.error = nil
+                try? await Task.sleep(for: .milliseconds(600))
+                continue
+            }
             populate(model); model.page = "all"
             await shot(window, "\(appearance)-01-library", directory)
             model.page = "open"

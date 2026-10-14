@@ -1,0 +1,54 @@
+{
+  "snapshotSequence": 1,
+  "projects": [
+    {
+      "id": "project-example",
+      "title": "Example app",
+      "workspaceRoot": "/example/app",
+      "defaultModelSelection": null,
+      "scripts": [],
+      "createdAt": "2026-10-14T09:00:00.000Z",
+      "updatedAt": "2026-10-14T09:00:00.000Z",
+      "deletedAt": null
+    }
+  ],
+  "threads": [
+    {
+      "id": "thread-example",
+      "projectId": "project-example",
+      "title": "Annotations",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example-model"
+      },
+      "runtimeMode": "approval-required",
+      "interactionMode": "default",
+      "branch": null,
+      "worktreePath": null,
+      "createdAt": "2026-10-14T09:00:00.000Z",
+      "updatedAt": "2026-10-14T09:00:00.000Z",
+      "deletedAt": null,
+      "session": {
+        "status": "ready",
+        "activeTurnId": null
+      },
+      "messages": [
+        {
+          "id": "message-example",
+          "role": "assistant",
+          "text": "Example response",
+          "createdAt": "2026-10-14T09:00:00.000Z"
+        }
+      ],
+      "activities": [
+        {
+          "id": "activity-example",
+          "kind": "tool.completed",
+          "createdAt": "2026-10-14T09:00:00.000Z"
+        }
+      ],
+      "latestTurn": null
+    }
+  ],
+  "updatedAt": "2026-10-14T09:00:00.000Z"
+}

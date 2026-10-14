@@ -83,6 +83,7 @@ impl Instance {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSelection {
+    #[serde(alias = "provider")]
     pub instance_id: String,
     pub model: String,
 }
@@ -96,73 +97,15 @@ impl ModelSelection {
     }
 }
 
-/// The parts of Conn's read model this app uses.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub projects: Vec<SnapshotProject>,
-    pub threads: Vec<Thread>,
-}
-
-/// Conn's model; some fields only document its shape.
-#[allow(dead_code)]
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct SnapshotProject {
-    pub id: String,
-    pub title: Option<String>,
-    pub workspace_root: String,
-    pub deleted_at: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Thread {
-    pub id: String,
-    pub project_id: Option<String>,
-    pub model_selection: Option<ModelSelection>,
-    pub updated_at: Option<String>,
-    pub deleted_at: Option<String>,
-    pub session: Option<ThreadSession>,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadSession {
-    pub status: Option<String>,
-    pub active_turn_id: Option<String>,
-}
-
-impl Thread {
-    /// No turn is running, so a new message starts work at once.
-    pub fn is_idle(&self) -> bool {
-        self.session.as_ref().and_then(|s| s.active_turn_id.as_ref()).is_none()
-    }
-}
+#[path = "conn_wire.rs"]
+mod wire;
+use wire::{Snapshot, Thread};
 
 fn normalize(path: &str) -> String {
     let expanded = expand_tilde(path);
     let resolved = std::fs::canonicalize(&expanded).unwrap_or(expanded);
     let text = resolved.to_string_lossy().to_string();
     if text.len() > 1 { text.trim_end_matches('/').to_string() } else { text }
-}
-
-impl Snapshot {
-    /// The active project whose folder is `root`, comparing resolved paths.
-    pub fn project(&self, root: &str) -> Option<&SnapshotProject> {
-        let wanted = normalize(root);
-        self.projects.iter().find(|p| p.deleted_at.is_none() && normalize(&p.workspace_root) == wanted)
-    }
-
-    /// The model of the most recently updated thread: a default that needs no setup.
-    pub fn latest_model(&self) -> Option<ModelSelection> {
-        self.threads.iter()
-            .filter(|t| t.deleted_at.is_none() && t.model_selection.is_some())
-            .max_by(|a, b| a.updated_at.as_deref().unwrap_or("").cmp(b.updated_at.as_deref().unwrap_or("")))
-            .and_then(|t| t.model_selection.clone())
-    }
 }
 
 pub fn uuid() -> String {
@@ -224,11 +167,18 @@ pub struct Client {
     pub origin: url::Url,
     pub token: String,
     http: reqwest::Client,
+    server: tokio::sync::OnceCell<ServerInfo>,
+}
+
+#[derive(Default)]
+struct ServerInfo {
+    v2: bool,
+    version: Option<String>,
 }
 
 impl Client {
     pub fn new(origin: url::Url, token: String) -> Client {
-        Client { origin, token, http: crate::http::short() }
+        Client { origin, token, http: crate::http::short(), server: tokio::sync::OnceCell::new() }
     }
 
     fn url(&self, path: &str) -> url::Url {
@@ -253,29 +203,145 @@ impl Client {
         }
     }
 
+    /// Negotiate before any mutation. Never retry a write with a different protocol.
+    async fn server(&self) -> Result<&ServerInfo, ConnError> {
+        self.server.get_or_try_init(|| async {
+            let data = match self.send(self.http.get(self.url(".well-known/t3/environment"))).await {
+                Ok(data) => data,
+                Err(ConnError::Rejected(message)) if message.starts_with("404 ") => return Ok(ServerInfo::default()),
+                Err(error) => return Err(error),
+            };
+            // Old servers may serve their HTML shell for this unknown route.
+            if data.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'<') {
+                return Ok(ServerInfo::default());
+            }
+            let body: Value = wire::decode(&data, "environment", None)?;
+            let version = body["serverVersion"].as_str().map(String::from);
+            let v2 = match body.get("orchestrationProtocolVersion") {
+                None => false,
+                Some(value) if value == 1 => false,
+                Some(value) if value == 2 => true,
+                Some(_) => return Err(wire::problem("environment", "orchestrationProtocolVersion is not supported; expected 1 or 2", version.as_deref())),
+            };
+            Ok(ServerInfo { v2, version })
+        }).await
+    }
+
     pub async fn snapshot(&self) -> Result<Snapshot, ConnError> {
-        let data = self.send(self.http.get(self.url("api/orchestration/snapshot"))).await?;
-        serde_json::from_slice(&data).map_err(|_| {
-            ConnError::Unexpected("Conn's snapshot has an unexpected shape. This Conn version may not be supported.".into())
-        })
+        let server = self.server().await?;
+        let path = if server.v2 { "api/orchestration/shell" } else { "api/orchestration/snapshot" };
+        let data = self.send(self.http.get(self.url(path)).header("x-t3-orchestration-protocol", "2")).await?;
+        wire::decode(&data, "snapshot", server.version.as_deref())
     }
 
     pub async fn thread(&self, id: &str) -> Result<Thread, ConnError> {
-        #[derive(Deserialize)]
-        struct Body {
-            thread: Thread,
+        let server = self.server().await?;
+        let mut url = self.url("api/orchestration/threads");
+        url.path_segments_mut().expect("HTTP URL").push(id);
+        let data = self.send(self.http.get(url).header("x-t3-orchestration-protocol", "2")).await?;
+        let thread = wire::thread(&data, server.v2, server.version.as_deref())?;
+        if thread.id != id {
+            return Err(wire::problem("thread", "id does not match the requested thread", server.version.as_deref()));
         }
-        let data = self.send(self.http.get(self.url(&format!("api/orchestration/threads/{id}")))).await?;
-        serde_json::from_slice::<Body>(&data).map(|b| b.thread).map_err(|_| {
-            ConnError::Unexpected("Conn's thread has an unexpected shape. This Conn version may not be supported.".into())
-        })
+        Ok(thread)
     }
 
     pub async fn dispatch(&self, command: &Value) -> Result<(), ConnError> {
-        let request = self.http.post(self.url("api/orchestration/dispatch"))
-            .header("Content-Type", "application/json").body(command.to_string());
-        self.send(request).await.map(|_| ())
+        let server = self.server().await?;
+        if server.v2 {
+            let mut command = command.clone();
+            // V2 timestamps are assigned by the server.
+            command.as_object_mut().expect("command object").remove("createdAt");
+            if command["type"] == "project.create" {
+                let data = self.send(self.http.post(self.url("api/projects/mutate")).json(&command)).await?;
+                let project: wire::SnapshotProject = wire::decode(&data, "project", server.version.as_deref())?;
+                if command["projectId"] != project.id {
+                    return Err(wire::problem("project", "id does not match the created project", server.version.as_deref()));
+                }
+                return Ok(());
+            }
+            // Conn's desktop client uses the same user/web creation metadata.
+            command["createdBy"] = json!("user");
+            command["creationSource"] = json!("web");
+            if command["type"] == "thread.turn.start" {
+                let message = command["message"].clone();
+                command["type"] = json!("message.dispatch");
+                command["messageId"] = message["messageId"].clone();
+                command["text"] = message["text"].clone();
+                command["attachments"] = message["attachments"].clone();
+                command["dispatchMode"] = json!({"type": "start_immediately"});
+                for field in ["message", "runtimeMode", "interactionMode"] {
+                    command.as_object_mut().unwrap().remove(field);
+                }
+            }
+            return self.dispatch_v2(command).await;
+        }
+        let data = self.send(self.http.post(self.url("api/orchestration/dispatch")).json(command)).await?;
+        // Do not mistake the SPA's HTTP 200 for an accepted command.
+        let reply: Value = wire::decode(&data, "dispatch", server.version.as_deref())?;
+        if !reply["sequence"].is_u64() {
+            return Err(wire::problem("dispatch", "sequence is missing or invalid", server.version.as_deref()));
+        }
+        Ok(())
     }
+
+    /// One bounded Effect RPC request on Conn's authenticated V2 WebSocket.
+    async fn dispatch_v2(&self, command: Value) -> Result<(), ConnError> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+        let version = self.server.get().and_then(|s| s.version.as_deref());
+        let failure = |detail: &str| wire::problem("dispatch", detail, version);
+        let operation = async {
+            let mut url = self.url("ws");
+            let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+            url.set_scheme(scheme).expect("WebSocket scheme");
+            url.set_query(Some("orchestrationProtocol=2"));
+            let mut request = url.as_str().into_client_request().map_err(|_| failure("invalid WebSocket URL"))?;
+            request.headers_mut().insert("Authorization", format!("Bearer {}", self.token).parse()
+                .map_err(|_| failure("invalid access token header"))?);
+            // connect_async does not follow redirects, so credentials stay on this origin.
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.map_err(|error| {
+                if let tokio_tungstenite::tungstenite::Error::Http(response) = &error {
+                    if matches!(response.status().as_u16(), 401 | 403) { return ConnError::Unauthorized; }
+                }
+                failure("WebSocket connection failed")
+            })?;
+            let request = json!({"_tag": "Request", "id": "1", "tag": "orchestration.dispatchCommand",
+                "payload": command, "headers": []});
+            socket.send(Message::Text(request.to_string().into())).await.map_err(|_| failure("could not send command"))?;
+            while let Some(frame) = socket.next().await {
+                let frame = frame.map_err(|_| failure("WebSocket closed before the command was acknowledged"))?;
+                match frame {
+                    Message::Ping(data) => { socket.send(Message::Pong(data)).await.map_err(|_| failure("WebSocket closed"))?; }
+                    Message::Text(text) => {
+                        let reply: Value = wire::decode(text.as_bytes(), "dispatch", version)?;
+                        if reply["_tag"] == "Ping" {
+                            socket.send(Message::Text(json!({"_tag": "Pong"}).to_string().into())).await
+                                .map_err(|_| failure("WebSocket closed"))?;
+                        } else if reply["_tag"] == "Exit" && (reply["requestId"] == "1" || reply["requestId"] == 1) {
+                            let _ = socket.close(None).await;
+                            if reply["exit"]["_tag"] == "Success" && reply["exit"]["value"]["sequence"].is_u64() {
+                                return Ok(());
+                            }
+                            if let Some(message) = reply["exit"]["cause"].as_array().and_then(|causes|
+                                causes.iter().find_map(|cause| cause["error"]["message"].as_str())) {
+                                return Err(ConnError::Rejected(message.chars().take(300).collect()));
+                            }
+                            return Err(failure("command was rejected or its acknowledgement has no sequence"));
+                        } else if reply["_tag"] == "Defect" {
+                            return Err(failure("server could not process the command"));
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            Err(failure("WebSocket closed before the command was acknowledged"))
+        };
+        tokio::time::timeout(Duration::from_secs(15), operation).await
+            .map_err(|_| failure("command acknowledgement timed out; check the thread in Conn before retrying"))?
+    }
+
 }
 
 /// The Conn token in the login Keychain, one item per Conn endpoint.
@@ -498,13 +564,23 @@ impl Conn {
 
     /// Creates a thread in the project's folder and sends the prompt. Showing it is a separate action.
     pub async fn start(&self, settings: &Settings, project: &Project, prompt: &str) -> Result<String, String> {
+        self.start_with_client(settings, project, prompt, None).await
+    }
+
+    async fn start_with_client(&self, settings: &Settings, project: &Project, prompt: &str,
+        client: Option<Client>) -> Result<String, String> {
         let result = async {
             if project.root.is_empty() {
                 return Err(ConnError::Unexpected(format!("Set a folder for {} in Settings › Projects first.", project.name)));
             }
-            let client = Conn::authorized_client(settings)?;
+            let client = match client { Some(client) => client, None => Conn::authorized_client(settings)? };
             let run = async {
                 let snapshot = client.snapshot().await?;
+                // The project's model, then the default from Settings, then the server's most recent thread.
+                let model = ModelSelection::parse(&project.t3_model)
+                    .or_else(|| ModelSelection::parse(&settings.t3_default_model))
+                    .or_else(|| snapshot.latest_model())
+                    .ok_or_else(|| ConnError::Unexpected("Set a default model in Settings › General › Conn, such as codex/gpt-6.1-sol. This server has no threads to copy one from.".into()))?;
                 let project_id = match snapshot.project(&project.root) {
                     Some(existing) => existing.id.clone(),
                     None => {
@@ -513,11 +589,6 @@ impl Conn {
                         id
                     }
                 };
-                // The project's model, then the default from Settings, then the server's most recent thread.
-                let model = ModelSelection::parse(&project.t3_model)
-                    .or_else(|| ModelSelection::parse(&settings.t3_default_model))
-                    .or_else(|| snapshot.latest_model())
-                    .ok_or_else(|| ConnError::Unexpected("Set a default model in Settings › General › Conn, such as codex/gpt-6.1-sol. This server has no threads to copy one from.".into()))?;
                 let thread_id = uuid();
                 let title = format!("Annotations · {}", project.name);
                 client.dispatch(&command::create_thread(&thread_id, &project_id, &title, &model,
@@ -795,8 +866,6 @@ mod tests {
         assert_eq!(snapshot.project("/tmp").unwrap().id, "p1");
         assert!(snapshot.project("/nowhere").is_none());
         assert_eq!(snapshot.latest_model().unwrap().model, "gpt-6.1-sol");
-        assert!(snapshot.threads[0].is_idle());
-        assert!(!snapshot.threads[1].is_idle());
     }
 
     #[test]
@@ -834,16 +903,16 @@ mod tests {
         let down = Client::new(closed_url(""), "x".into());
         assert!(matches!(down.dispatch(&json!({"type": "x"})).await, Err(ConnError::NotRunning(_))));
 
-        let server = serve(vec![Reply::new(200, "")]);
+        let server = serve(vec![Reply::new(200, r#"{"serverVersion":"old"}"#), Reply::new(200, r#"{"sequence":1}"#)]);
         Client::new(server.url(""), "secret".into()).dispatch(&json!({"type": "x"})).await.unwrap();
-        let request = server.request(0);
+        let request = server.request(1);
         assert_eq!(request.header("authorization"), Some("Bearer secret"));
         assert_eq!(request.path, "/api/orchestration/dispatch");
         assert_eq!(serde_json::from_slice::<Value>(&request.body).unwrap(), json!({"type": "x"}));
 
-        let server = serve(vec![Reply::new(404, "gone")]);
+        let server = serve(vec![Reply::new(200, "{}"), Reply::new(404, "gone")]);
         assert_eq!(Client::new(server.url(""), "x".into()).thread("t").await.unwrap_err(), ConnError::Rejected("404 gone".into()));
-        assert_eq!(server.request(0).path, "/api/orchestration/threads/t");
+        assert_eq!(server.request(1).path, "/api/orchestration/threads/t");
     }
 
     #[test]
@@ -934,3 +1003,7 @@ mod tests {
         assert!(conn.nudge(&settings, &[], &[]).await.is_none(), "no sessions, nothing to do");
     }
 }
+
+#[cfg(test)]
+#[path = "conn_compat_tests.rs"]
+mod compat_tests;
