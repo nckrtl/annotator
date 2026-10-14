@@ -165,6 +165,7 @@ struct MenuPanel: View {
     @Bindable var model: AppModel
     @State private var contentHeight: CGFloat = 480
     @State private var scrolled = false
+    @State private var query = ""
     private static let maxHeight: CGFloat = 620
     private var pending: Int { model.state["pending"]["count"].int }
     private var failed: Int { model.state["failedCount"].int }
@@ -174,7 +175,7 @@ struct MenuPanel: View {
         return tone == "error" || (tone == "warning" && pending == 0 && failed == 0)
     }
     var body: some View {
-        let items = model.items.sorted { $0["number"].int > $1["number"].int }
+        let items = AnnotationCollection.items(model.items, page: "all", projects: [], search: query).sorted { $0["number"].int > $1["number"].int }
         KitScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
@@ -183,6 +184,7 @@ struct MenuPanel: View {
                 }
                 if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
                 if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
+                else if items.isEmpty { Text("No annotations match “\(query)”.").font(.kitLabel).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 40) }
                 // As in Operator's flyout: every annotation, newest first, full width, split by hairlines.
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(items, id: \.["id"].string) { item in
@@ -200,25 +202,23 @@ struct MenuPanel: View {
         // The list starts below the header and scrolls behind its frosted surface.
         .contentMargins(.top, Kit.containerBarHeight, for: .scrollContent)
         .kitBottomFade()
-        // Like a sheet header: the line under the header shows only once content scrolls under it.
+        // The frosted surface shows once content scrolls under the header; its bottom line always shows.
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, value in
             withAnimation(Kit.Motion.fast) { scrolled = value }
         }
         .overlay(alignment: .top) {
             header.background { KitHeaderSurface().opacity(scrolled ? 1 : 0) }
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5).opacity(scrolled ? 1 : 0) }
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5) }
         }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
         .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(Self.maxHeight, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
-    /// As in Operator: the title starts where row text starts, and one ⋯ menu holds the app's actions.
+    /// A search field across the header, and one ⋯ menu that holds the app’s actions.
     private var header: some View {
         HStack(spacing: Kit.Space.m) {
-            Color.clear.frame(width: MenuAnnotationRow.controlWidth, height: 1)
-            Text("Annotations").font(.kitTitle)
-                .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
+            KitHeaderSearchField(text: $query, prompt: "Search annotations") {}
             KitToolbarGroup {
                 KitToolbarMenu(help: "More") {
                     Button("Open Annotator") { model.navigate("all") }
