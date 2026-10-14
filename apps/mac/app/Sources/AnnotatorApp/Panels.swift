@@ -154,6 +154,7 @@ struct MenuPanel: View {
     @Bindable var model: AppModel
     @State private var contentHeight: CGFloat = 480
     @State private var scrolled = false
+    private static let maxHeight: CGFloat = 620
     private var pending: Int { model.state["pending"]["count"].int }
     private var failed: Int { model.state["failedCount"].int }
     /// Pending and refused comments have their own notices; any other unhealthy state shows here.
@@ -178,14 +179,16 @@ struct MenuPanel: View {
                             .padding(.leading, Kit.rowInset)
                             .padding(.top, day.label == days.first?.label ? 2 : Kit.Space.xxl)
                             .padding(.bottom, Kit.Space.xs)
-                        ForEach(day.items, id: \.self) { item in
+                        ForEach(day.items, id: \.["id"].string) { item in
                             MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
                         }
                     }
                 }
             }
             .padding(.horizontal, Kit.columnMargin).padding(.bottom, 28)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            // A lazy stack re-estimates its height while it scrolls. Stop at the panel's limit, so
+            // that does not resize the menu bar window on every scroll step.
+            .onGeometryChange(for: CGFloat.self) { min($0.size.height, Self.maxHeight) } action: { contentHeight = $0 }
         }
         .scrollIndicators(.never)
         // The list starts below the header and scrolls behind its frosted surface.
@@ -196,12 +199,12 @@ struct MenuPanel: View {
             withAnimation(Kit.Motion.fast) { scrolled = value }
         }
         .overlay(alignment: .top) {
-            header.background { KitHeaderSurface() }
+            header.background { KitHeaderSurface().opacity(scrolled ? 1 : 0) }
                 .overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5).opacity(scrolled ? 1 : 0) }
         }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
-        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
+        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(Self.maxHeight, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
     /// Annotations by day, newest first, labelled as Operator labels transcriptions.
@@ -290,11 +293,12 @@ private struct MenuAnnotationRow: View {
 /// The installed app's icon at 26 pt, as in Operator's `AppIconTile`, or a quiet tile when unknown.
 private struct MenuAppIcon: View {
     let bundleId: String
-    @MainActor private static var cache: [String: NSImage] = [:]
+    /// Keeps misses too, so an app that is not installed is looked up once.
+    @MainActor private static var cache: [String: NSImage?] = [:]
     private var image: NSImage? {
         if let image = Self.cache[bundleId] { return image }
-        guard !bundleId.isEmpty, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return nil }
-        let image = NSWorkspace.shared.icon(forFile: url.path)
+        let url = bundleId.isEmpty ? nil : NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId)
+        let image = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
         Self.cache[bundleId] = image
         return image
     }
