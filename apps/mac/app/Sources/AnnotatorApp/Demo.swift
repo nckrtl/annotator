@@ -41,7 +41,7 @@ import ScreenCaptureKit
         #endif
     }
     private static func item(_ number: Int, _ comment: String, _ app: String, _ status: String) -> JSON {
-        .object(["id": .string("demo-\(number)"), "number": .number(Double(number)), "comment": .string(comment), "status": .string(status), "element": .string("AXButton \"Open project\""), "elementPath": .string("AXWindow > AXWebArea > AXButton"), "pathname": .string("Project overview"), "url": .string("http://localhost:3000/projects"), "native": .object(["app": .object(["name": .string(app), "bundleId": .string("com.apple.Safari")]), "project": .string("Website"), "mode": .string("element")])])
+        .object(["id": .string("demo-\(number)"), "number": .number(Double(number)), "comment": .string(comment), "status": .string(status), "element": .string("AXButton \"Open project\""), "elementPath": .string("AXWindow > AXWebArea > AXButton"), "pathname": .string("Project overview"), "url": .string("http://localhost:3000/projects"), "native": .object(["app": .object(["name": .string(app), "bundleId": .string(["Finder": "com.apple.finder", "Notes": "com.apple.Notes"][app] ?? "com.apple.Safari")]), "project": .string("Website"), "mode": .string("element")])])
     }
     #if DEBUG
     static func capture(_ model: AppModel, directory: String) async {

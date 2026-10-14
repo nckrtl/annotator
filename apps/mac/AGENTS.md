@@ -86,7 +86,7 @@ helper. Read this file before you change it.
    server's error in the panel. Keep a local copy until the POST succeeds, so a
    down server does not lose the comment.
 8. **Queue.** The menu bar menu shows open, in-progress and done counts, the
-   latest items with their number and comment, and a link to open the server
+   latest items with their app and comment, and a link to open the server
    URL. Subscribe to `GET <base>/events` (server-sent events) for live
    updates; fall back to polling `GET <base>` every 3s if the stream drops,
    and show "server unreachable" after three failed polls.
