@@ -60,7 +60,7 @@ import AnnotatorCore
     }
 
     func makeComment() -> NSPanel {
-        let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320), styleMask: [.borderless], backing: .buffered, defer: false)
+        let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 240), styleMask: [.borderless], backing: .buffered, defer: false)
         // `isFloatingPanel` resets the level, so it comes first. The comment sits above the frozen screen.
         panel.isFloatingPanel = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 2)
@@ -79,8 +79,7 @@ struct CommentView: View {
     @FocusState private var focused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                KitBrandMark(.annotator, size: 26).foregroundStyle(.primary)
+            HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Annotate").font(.kitTitle)
                     Text(model.target["label"].string).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1).help(model.target["label"].string)
@@ -94,15 +93,16 @@ struct CommentView: View {
                 .overlay(RoundedRectangle(cornerRadius: Kit.Radius.row).strokeBorder(Color.kitSeparator, lineWidth: 0.5))
                 .accessibilityLabel("Comment")
             if let error = model.voice.error ?? model.commentError { KitGroup { KitNotice(error, tone: .error) } }
-            Text("↩ submits · ⇧↩ adds a line · Esc cancels").font(.kitDetail).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 if model.target["dictation"] != .null {
-                    KitIconButton(.microphone, help: model.dictation == "recording" ? "Stop dictation" : "Dictate comment") {
-                        focused = true
-                        if model.dictation == "recording" { Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } } }
-                        else { model.startDictation() }
-                    }.disabled(model.commentBusy || ["starting", "transcribing"].contains(model.dictation))
-                    Text(model.dictation == "idle" ? "Dictate" : model.dictation.capitalized + "…").font(.kitDetail).foregroundStyle(.secondary)
+                    KitToolbarGroup {
+                        KitToolbarButton(icon: .microphone, help: model.dictation == "recording" ? "Stop dictation" : "Dictate comment") {
+                            focused = true
+                            if model.dictation == "recording" { Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } } }
+                            else { model.startDictation() }
+                        }.disabled(model.commentBusy || ["starting", "transcribing"].contains(model.dictation))
+                    }
+                    if model.dictation != "idle" { Text(model.dictation.capitalized + "…").font(.kitDetail).foregroundStyle(.secondary) }
                     if model.dictation == "transcribing" {
                         KitStatusIcon(.working, size: 12).accessibilityHidden(true)
                     }

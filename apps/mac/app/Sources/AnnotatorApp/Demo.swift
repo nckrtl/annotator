@@ -129,7 +129,7 @@ import ScreenCaptureKit
             model.state["permissions"] = .object(["accessibility": .bool(true), "screenRecording": .bool(true)])
             await shot(permissions, "\(appearance)-13-permissions-ready", directory); permissions.close()
             model.target = .object(["label": .string("Safari · Open project"), "mode": .string("element"), "dictation": .object(["autoStart": .bool(false)])]); model.comment = "Make the button label easier to read."; model.commentError = nil
-            let comment = demoWindow(CommentView(model: model), size: NSSize(width: 420, height: 320))
+            let comment = demoWindow(CommentView(model: model), size: NSSize(width: 420, height: 240))
             await shot(comment, "\(appearance)-14-comment", directory)
             model.demoDictation = "recording"
             await shot(comment, "\(appearance)-15-recording", directory)
