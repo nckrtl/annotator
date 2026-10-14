@@ -54,8 +54,8 @@ helper. Read this file before you change it.
    around the hovered element and a small label: app name, role and title.
 3. **Hit test.** On mouse move, find the element under the cursor:
    - Use `CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID)` to
-     get the topmost on-screen window at the point, skipping this app's own
-     windows (match `kCGWindowOwnerPID` against our pid) and windows at
+     get the topmost on-screen window at the point, skipping the helper's
+     windows (match `kCGWindowOwnerPID` against the helper's pid) and windows at
      system layers that are not content (Dock, overlays). Open menus, the menu
      bar and status menus count, so they can be annotated.
    - Create `AXUIElementCreateApplication(pid)` for that window's owner and
@@ -86,8 +86,8 @@ helper. Read this file before you change it.
    button: see Dictation.
 6. **Capture.** Use ScreenCaptureKit, with `SCScreenshotManager` and an
    `SCContentFilter` for the display. Capture the element frame plus a 24pt
-   margin. Exclude this app's own windows
-   from the filter, so the overlay and panel are not in the image. Encode as
+   margin. Exclude the helper's windows from the filter, so the overlay is not
+   in the image. Annotator's library and menu stay in: they can be annotated. Encode as
    JPEG (quality about 0.8) and downscale if needed to keep the request under
    the server's 10 MiB limit. Cut the image from the frozen screen, so it shows
    what the user saw, open menus included. Without one, capture right before you
@@ -269,8 +269,10 @@ own `com.nckrtl.annotator.native` bundle ID and LSUIElement flag, matching its e
 ID. Keep the inherited TCC responsibility; never launch the helper through LaunchServices.
 Sign its bundle before signing the host. The installer terminates only the running application
 whose executable path matches the installed host, then waits for that PID. No network
-listener is added. `ANNOTATOR_HOST_PID` tells the helper to exclude all three
-processes from hit testing and capture. Closing the host's pipe stops the core
+listener is added. The helper excludes only itself and the core from hit testing
+and capture; Annotator's own windows stay visible and selectable. Annotate mode
+does not hide them. The comment hides the library unless the annotation is of
+Annotator itself. Closing the host's pipe stops the core
 and its helper. A core failure is visible and fails all outstanding requests.
 
 Bundle id stays `com.nckrtl.annotator`; `LSUIElement` remains true. Settings,

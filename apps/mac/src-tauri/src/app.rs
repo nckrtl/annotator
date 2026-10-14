@@ -540,6 +540,7 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
     let target = json!({
         "label": event["label"].as_str().unwrap_or_default(),
         "mode": event["mode"].as_str().unwrap_or("element"),
+        "bundleId": event["record"]["native"]["app"]["bundleId"].as_str(),
         "captureError": event["captureError"].as_str(),
         "dictation": dictation,
     });

@@ -8,12 +8,9 @@ import os
 
 let log = Logger(subsystem: "com.nckrtl.annotator.native", category: "helper")
 
-/// The capture helper, Rust core and SwiftUI host. Hit tests and captures skip all three.
-var ourPids: Set<pid_t> {
-    var pids: Set<pid_t> = [getpid(), getppid()]
-    if let host = ProcessInfo.processInfo.environment["ANNOTATOR_HOST_PID"].flatMap(Int32.init) { pids.insert(host) }
-    return pids
-}
+/// The capture helper and the Rust core. Hit tests and captures skip them, so the overlay never shows.
+/// The SwiftUI host is not skipped: its library and menu can be annotated like any other app.
+var ourPids: Set<pid_t> { [getpid(), getppid()] }
 
 private let output = NSLock()
 

@@ -4,13 +4,8 @@ import AnnotatorCore
 
 @MainActor @Observable final class AppModel {
     static let shared = AppModel()
-    var state: JSON = .object([:]) {
-        didSet {
-            if isAnnotating && !(oldValue["annotating"].bool || oldValue["commentOpen"].bool) {
-                hideLibraryForAnnotation()
-            }
-        }
-    }
+    /// Annotate mode leaves Annotator's own windows as they are, so they can be annotated too.
+    var state: JSON = .object([:])
     var settings: JSON = .object([:])
     var projects: [JSON] = []
     var projectsError = ""
@@ -66,9 +61,7 @@ import AnnotatorCore
         bridge.onEvent = { [weak self] event, value in self?.event(event, value) }
         do {
             let executable = Bundle.main.resourceURL!.appendingPathComponent("annotator-core")
-            var environment = ProcessInfo.processInfo.environment
-            environment["ANNOTATOR_HOST_PID"] = String(getpid())
-            try bridge.start(executable: executable, environment: environment)
+            try bridge.start(executable: executable, environment: ProcessInfo.processInfo.environment)
             Task { await load() }
         } catch { self.error = error.localizedDescription }
     }
@@ -92,7 +85,10 @@ import AnnotatorCore
         Task { do { _ = try await call(command, args) } catch { self.error = error.localizedDescription } }
     }
     /// Activation for the comment field must not also reveal the library.
+    /// The comment activates Annotator, which would raise the library over the annotated app.
+    /// When the annotation is of Annotator itself, the library stays.
     func hideLibraryForAnnotation() {
+        guard target["bundleId"].string != Bundle.main.bundleIdentifier else { return }
         window?.orderOut(nil)
         panels?.menu?.orderOut(nil)
     }
@@ -117,7 +113,7 @@ import AnnotatorCore
             DictationLog.write("overlay-release core-stopped")
             error = value.string
         case "hide-menu": panels?.menu?.orderOut(nil)
-        case "comment-opened": hideLibraryForAnnotation(); voice.cancel(); target = value; comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
+        case "comment-opened": voice.cancel(); target = value; hideLibraryForAnnotation(); comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
         case "show-comment": panels?.showComment(value)
         case "hide-comment": panels?.hideComment()
         case "comment-cancel": cancelDictation(); panels?.hideComment()

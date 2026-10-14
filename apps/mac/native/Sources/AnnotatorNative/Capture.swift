@@ -26,7 +26,7 @@ enum Capture {
     }
 
     /// Captures `rect` (global top-left points) plus a margin, from the display that holds its center.
-    /// The helper's and Annotator's windows are excluded, so the overlay and panels are not in the image.
+    /// The helper's windows are excluded, so the overlay is not in the image.
     static func capture(_ rect: CGRect) async throws -> Result {
         let content: SCShareableContent
         do {
@@ -71,7 +71,7 @@ enum Capture {
         var screenSize: CGSize
     }
 
-    /// Every display, without the helper's and Annotator's windows.
+    /// Every display, without the helper's overlay.
     static func stills() async throws -> [Still] {
         let content: SCShareableContent
         do {

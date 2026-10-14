@@ -52,7 +52,7 @@ final class AXReader: @unchecked Sendable {
         var bundleURL: URL?
     }
 
-    /// The topmost window at `point`. Skips the helper's and Annotator's windows and system layers.
+    /// The topmost window at `point`. Skips the helper's overlay and system layers.
     /// App windows (below 20), the menu bar (24), status items (25) and open menus (101) count.
     private func topWindow(at point: CGPoint) -> FoundWindow? {
         guard

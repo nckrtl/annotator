@@ -36,8 +36,8 @@ UI events, in addition to the state and comment events below:
   Screens carry `frame` and `visible` rects in AppKit points. The core keeps its
   tested multi-display placement; the UI sends the current screen and panel sizes.
 
-The host passes `ANNOTATOR_HOST_PID` to the core and helper. The helper excludes
-that pid, its parent and itself from capture and hit tests. `ANNOTATOR_HELPER`
+The helper excludes its parent (the core) and itself from capture and hit tests.
+The host's windows stay in, so Annotator can be annotated. `ANNOTATOR_HELPER`
 may select a controlled helper fixture in integration tests.
 
 ## 1. Helper protocol (Rust ↔ `annotator-native`)
