@@ -153,6 +153,8 @@ struct PermissionsView: View {
 struct MenuPanel: View {
     @Bindable var model: AppModel
     @State private var contentHeight: CGFloat = 480
+    @State private var scrolled = false
+    private static let bottomInset: CGFloat = 5
     private var pending: Int { model.state["pending"]["count"].int }
     private var failed: Int { model.state["failedCount"].int }
     /// Pending and refused comments have their own notices; any other unhealthy state shows here.
@@ -162,36 +164,41 @@ struct MenuPanel: View {
     }
     var body: some View {
         let days = Self.days(model.items)
-        VStack(spacing: 0) {
-            header
-            KitScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
-                    if pending > 0 {
-                        KitGroup { KitNotice("\(pending) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }.padding(.bottom, Kit.Space.m)
-                    }
-                    if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
-                    if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
-                    // As in Operator's transcript list: every annotation, newest first, under day headings.
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(days, id: \.label) { day in
-                            Text(verbatim: day.label).font(.kitSection).foregroundStyle(.secondary)
-                                .padding(.leading, Kit.rowInset)
-                                .padding(.top, day.label == days.first?.label ? 2 : Kit.Space.xxl)
-                                .padding(.bottom, Kit.Space.xs)
-                            ForEach(day.items, id: \.self) { item in
-                                MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
-                            }
+        KitScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
+                if pending > 0 {
+                    KitGroup { KitNotice("\(pending) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }.padding(.bottom, Kit.Space.m)
+                }
+                if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
+                if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
+                // As in Operator's transcript list: every annotation, newest first, under day headings.
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(days, id: \.label) { day in
+                        Text(verbatim: day.label).font(.kitSection).foregroundStyle(.secondary)
+                            .padding(.leading, Kit.rowInset)
+                            .padding(.top, day.label == days.first?.label ? 2 : Kit.Space.xxl)
+                            .padding(.bottom, Kit.Space.xs)
+                        ForEach(day.items, id: \.self) { item in
+                            MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
                         }
                     }
                 }
-                .padding(.horizontal, Kit.columnMargin).padding(.bottom, 28)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-            }.scrollIndicators(.never).kitBottomFade()
+            }
+            .padding(.horizontal, Kit.columnMargin).padding(.bottom, Kit.columnMargin)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
+        .scrollIndicators(.never)
+        // Like a sheet header: the line under the header shows only once content scrolls under it.
+        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, value in
+            withAnimation(Kit.Motion.fast) { scrolled = value }
+        }
+        // As in Operator's panel: glass scroll edges under the header and at the bottom.
+        .kitGlassScroll { Color.clear.frame(height: Kit.containerBarHeight) } bottomBar: { Color.clear.frame(height: Self.bottomInset) }
+        .overlay(alignment: .top) { header.overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5).opacity(scrolled ? 1 : 0) } }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
-        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
+        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight + Self.bottomInset, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
     /// Annotations by day, newest first, labelled as Operator labels transcriptions.

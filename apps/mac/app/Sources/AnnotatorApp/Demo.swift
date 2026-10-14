@@ -113,6 +113,10 @@ import ScreenCaptureKit
             await shot(editor, "\(appearance)-27-project-editor-bottom", directory); editor.close()
             let menu = demoWindow(MenuPanel(model: model), size: NSSize(width: 360, height: 560))
             await shot(menu, "\(appearance)-11-menu", directory)
+            model.items += (203...210).map { item($0, "Older note \($0) for the scrolled flyout", "Safari", "done") }
+            await shot(menu, "\(appearance)-11b-menu-long", directory)
+            scrollToBottom(menu.contentView)
+            await shot(menu, "\(appearance)-11c-menu-scrolled", directory)
             model.items = Array(model.items.prefix(2))
             model.state["health"] = .object(["tone": .string("error"), "title": .string("Server unreachable")])
             model.state["pending"]["count"] = .number(3)
