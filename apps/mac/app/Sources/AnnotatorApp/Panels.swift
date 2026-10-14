@@ -95,14 +95,24 @@ struct CommentView: View {
             if let error = model.voice.error ?? model.commentError { KitGroup { KitNotice(error, tone: .error) } }
             HStack(spacing: 10) {
                 if model.target["dictation"] != .null {
-                    KitToolbarGroup {
-                        KitToolbarButton(icon: .microphone, help: model.dictation == "recording" ? "Stop dictation" : "Dictate comment") {
-                            focused = true
-                            if model.dictation == "recording" { Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } } }
-                            else { model.startDictation() }
-                        }.disabled(model.commentBusy || ["starting", "transcribing"].contains(model.dictation))
-                    }
-                    if model.dictation != "idle" { Text(model.dictation.capitalized + "…").font(.kitDetail).foregroundStyle(.secondary) }
+                    Group {
+                        if model.dictation == "recording" {
+                            // Recording: a red button with a white stop square, like the system recorders.
+                            Button {
+                                focused = true
+                                Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } }
+                            } label: {
+                                Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                                    .frame(width: Kit.toolbarGroupHeight, height: Kit.toolbarGroupHeight)
+                                    .background(Color.red, in: Circle()).contentShape(Circle())
+                            }.buttonStyle(.plain).help("Stop dictation")
+                        } else {
+                            KitToolbarGroup {
+                                KitToolbarButton(icon: .microphone, help: "Dictate comment") { focused = true; model.startDictation() }
+                            }
+                        }
+                    }.disabled(model.commentBusy || ["starting", "transcribing"].contains(model.dictation))
+                    if !["idle", "recording"].contains(model.dictation) { Text(model.dictation.capitalized + "…").font(.kitDetail).foregroundStyle(.secondary) }
                     if model.dictation == "transcribing" {
                         KitStatusIcon(.working, size: 12).accessibilityHidden(true)
                     }
