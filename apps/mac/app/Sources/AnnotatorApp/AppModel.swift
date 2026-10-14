@@ -8,6 +8,9 @@ import AnnotatorCore
     var settings: JSON = .object([:])
     var projects: [JSON] = []
     var projectsError = ""
+    var projectsSaving = false
+    var selectedProjectID = ""
+    var selectedProject: JSON? { projects.first { $0["id"].string == selectedProjectID } }
     var items: [JSON] = []
     var page = "all"
     var selected = ""
@@ -80,6 +83,7 @@ import AnnotatorCore
     func navigate(_ page: String, id: String? = nil) {
         self.page = page; search = ""; searching = false
         if let id { selected = id }
+        if page.hasPrefix("project:") { selectedProjectID = String(page.dropFirst("project:".count)) }
         panels?.menu?.orderOut(nil); showWindow?(); window?.makeKeyAndOrderFront(nil); NSApp.activate()
     }
     func saveSettings() async {

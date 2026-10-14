@@ -20,7 +20,7 @@ import DesignKit
             CommandGroup(replacing: .appSettings) { Button("Settings…") { model.navigate("settings") }.keyboardShortcut(",") }
             CommandGroup(after: .newItem) {
                 Button("Annotate screen") { model.act("toggle_annotating") }.keyboardShortcut("a", modifiers: [.control, .option])
-                Button("Find annotation") { model.navigate("all"); model.searching = true }.keyboardShortcut("f")
+                Button("Find") { if model.page == "settings" { model.navigate("all") }; model.searching = true }.keyboardShortcut("f")
             }
         }
         MenuBarExtra {
@@ -28,7 +28,7 @@ import DesignKit
                 .background(WindowOpener(model: model))
                 .onAppear { model.act("menu_opened") }
         } label: {
-            Image(nsImage: StatusIcon.image(annotating: model.state["annotating"].bool))
+            Image(systemName: model.state["annotating"].bool ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
                 .accessibilityLabel(model.state["annotating"].bool ? "Annotator: annotating" : "Annotator")
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
             if count > 0 { Text("\(count)") }

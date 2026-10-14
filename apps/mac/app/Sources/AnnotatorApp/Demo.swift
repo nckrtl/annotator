@@ -22,7 +22,10 @@ import ScreenCaptureKit
     static func populate(_ model: AppModel) {
         #if DEBUG
         model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"ofideEnabled":true,"ofideAutoStart":true,"ofideApp":"com.nckrtl.ofide","ofideURL":"http://127.0.0.1:12321","t3Enabled":true,"t3Endpoint":"http://127.0.0.1:3780","t3Home":"~/.t3/headless","t3WindowHome":"~/.t3/desktop-dev","t3Nudge":false,"t3DefaultModel":"claudeAgent/claude-opus-5-5","t3Effort":"medium","hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
-        var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); model.projects = [project]
+        var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); project["id"] = .string("website"); project["notes"] = .string("Run the local website before checking annotations.")
+        var native = newProject(); native["id"] = .string("desktop"); native["name"] = .string("Desktop app"); native["root"] = .string("~/Projects/desktop"); native["bundleIds"] = .array([.string("com.example.desktop")])
+        var docs = newProject(); docs["id"] = .string("docs"); docs["name"] = .string("Documentation"); docs["urlPrefixes"] = .array([.string("https://docs.example.com")])
+        model.projects = [project, native, docs]; model.selectedProjectID = ""
         model.items = [
             item(215, "Make the button label easier to read", "Safari", "todo"),
             item(214, "Align the title with the list below", "Finder", "in_progress"),
@@ -30,6 +33,8 @@ import ScreenCaptureKit
             item(212, "Give the search field more space", "Notes", "done"),
             item(211, "Use a clearer empty-state message", "Safari", "done")
         ]
+        model.items[1]["native"]["project"] = .string("Desktop app")
+        model.items[3]["native"]["project"] = .string("Inbox")
         model.items[3]["summary"] = .string("Increased the search field width and kept the clear button visible.")
         model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌃⌥A"},"localServer":{"running":true,"busy":false},"conn":{"enabled":true}}"#.utf8))
         model.selected = "demo-215"
@@ -64,8 +69,28 @@ import ScreenCaptureKit
             await shot(window, "\(appearance)-07-dictation", directory)
             NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
             await shot(window, "\(appearance)-08-conn", directory)
-            model.page = "projects"
+            model.navigate("projects")
+            await shot(window, "\(appearance)-28-project-empty-detail", directory)
+            model.selectedProjectID = "website"
             await shot(window, "\(appearance)-09-projects", directory)
+            scrollToBottom(window.contentView)
+            await shot(window, "\(appearance)-29-project-detail-bottom", directory)
+            model.navigate("project:website", id: "demo-215")
+            precondition(model.filtered.count == 3 && model.selectedProjectID == "website")
+            await shot(window, "\(appearance)-30-project-annotations", directory)
+            model.navigate("projects")
+            model.selectedProjectID = "docs"
+            await shot(window, "\(appearance)-31-project-zero-counts", directory)
+            model.selectedProjectID = "website"
+            window.setContentSize(Kit.windowMinSize)
+            await shot(window, "\(appearance)-32-project-minimum", directory)
+            window.setContentSize(NSSize(width: 1000, height: 680))
+            let savedProjects = model.projects
+            model.projects = []; model.selectedProjectID = ""
+            await shot(window, "\(appearance)-33-project-empty-list", directory)
+            model.projects = savedProjects; model.selectedProjectID = "website"
+            let add = demoWindow(ProjectEditor(model: model, initial: newProject(), dismiss: {}), size: NSSize(width: 560, height: 640))
+            await shot(add, "\(appearance)-34-project-add", directory); add.close()
             let editor = demoWindow(ProjectEditor(model: model, initial: model.projects[0], dismiss: {}), size: NSSize(width: 560, height: 640))
             await shot(editor, "\(appearance)-10-project-editor", directory)
             scrollToBottom(editor.contentView)
@@ -127,7 +152,7 @@ import ScreenCaptureKit
         window.contentView = NSHostingView(rootView: view); window.center(); window.orderFrontRegardless(); return window
     }
     private static func shot(_ window: NSWindow, _ name: String, _ directory: String) async {
-        window.orderFrontRegardless(); try? await Task.sleep(for: .milliseconds(550))
+        window.makeKeyAndOrderFront(nil); NSApp.activate(); try? await Task.sleep(for: .milliseconds(550))
         do {
             let content = try await SCShareableContent.currentProcess
             guard let ownWindow = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { throw BridgeError("Demo window is not on screen") }
