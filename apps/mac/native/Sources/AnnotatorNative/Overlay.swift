@@ -78,8 +78,11 @@ final class OverlayController {
         preparing = true
         let session = generation
         Task {
+            let started = Date()
             let recorded = await reader.frozenElements()
             guard session == generation else { return }
+            let mapped = recorded.windows.filter { $0.target != nil }
+            emit(["type": "log", "message": "Mapped \(mapped.count) windows, \(mapped.map(\.elements.count).reduce(0, +)) elements in \(Int(Date().timeIntervalSince(started) * 1000)) ms"])
             let captured: [Capture.Still]
             do {
                 captured = try await Capture.stills()
