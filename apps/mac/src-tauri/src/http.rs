@@ -13,12 +13,6 @@ pub fn short() -> Client {
     CLIENT.clone()
 }
 
-/// Ofide: `/dictate-stop` waits for transcription and paste, up to 120 seconds.
-pub fn long() -> Client {
-    static CLIENT: LazyLock<Client> = LazyLock::new(|| pinned(Client::builder().timeout(Duration::from_secs(125))));
-    CLIENT.clone()
-}
-
 /// The annotation event stream. No total timeout: the stream stays open, and each read times out
 /// instead (see `QueueMonitor::listen`).
 pub fn event_stream() -> Client {

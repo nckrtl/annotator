@@ -28,8 +28,8 @@ import DesignKit
                 .background(WindowOpener(model: model))
                 .onAppear { model.act("menu_opened") }
         } label: {
-            Image(systemName: model.state["annotating"].bool ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
-                .accessibilityLabel(model.state["annotating"].bool ? "Annotator: annotating" : "Annotator")
+            Image(systemName: model.isAnnotating ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
             if count > 0 { Text("\(count)") }
         }.menuBarExtraStyle(.window)
@@ -45,6 +45,9 @@ private struct WindowOpener: View {
         NSApp.setActivationPolicy(.accessory)
         AppModel.shared.start()
         #if DEBUG
+        if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_DICTATION_CHECK"] {
+            Task { await DictationCheck.run(AppModel.shared, directory: directory) }
+        }
         if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_MENU_CHECK"] {
             Task { await MenuCheck.run(AppModel.shared, directory: directory) }
         }

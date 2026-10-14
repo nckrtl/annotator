@@ -30,6 +30,16 @@ final class OverlayController {
     /// Esc while an overlay panel is key. A backup for Annotator's global Esc hotkey.
     var onEscape: (() -> Void)?
 
+    private lazy var watchdog = OverlayWatchdog(forceRelease: {
+        logOverlayRelease("main-actor-unresponsive")
+        exit(70)
+    }) { [weak self] in
+        guard let self, self.isVisible else { return }
+        self.hide(reason: "watchdog")
+        emit(["type": "overlay-timeout"])
+    }
+    private(set) var generation = 0
+
     private var hitTestRunning = false
     private var queuedPoint: CGPoint?
     private var lastHitTest = Date.distantPast
@@ -52,7 +62,9 @@ final class OverlayController {
 
     func show() {
         guard panels.isEmpty else { return }
+        generation += 1
         state = .hovering(nil)
+        watchdog.activity()
         panels = NSScreen.screens.map { screen in
             let panel = OverlayPanel(screen: screen, controller: self)
             panel.orderFrontRegardless()
@@ -62,7 +74,11 @@ final class OverlayController {
         mouseMoved()
     }
 
-    func hide() {
+    func hide(reason: String = "cancel-or-release") {
+        generation += 1
+        watchdog.stop()
+        if isVisible { logOverlayRelease(reason) }
+        queuedPoint = nil
         panels.forEach { $0.orderOut(nil) }
         panels = []
         NSCursor.arrow.set()
@@ -80,12 +96,14 @@ final class OverlayController {
     var cursor: CGPoint { Geometry.topLeft(fromAppKit: NSEvent.mouseLocation, mainScreenHeight: NSScreen.mainHeight) }
 
     func mouseMoved() {
+        if isVisible { watchdog.activity() }
         guard case .hovering = state else { return }
         NSCursor.crosshair.set()
         scheduleHitTest(cursor)
     }
 
     func mouseDown(option: Bool) {
+        watchdog.activity()
         guard case .hovering = state else { return }
         if option {
             state = .dragging(start: cursor, end: cursor)
@@ -94,6 +112,7 @@ final class OverlayController {
     }
 
     func mouseDragged() {
+        watchdog.activity()
         guard case .dragging(let start, _) = state else { return }
         state = .dragging(start: start, end: cursor)
         redraw()
@@ -151,7 +170,8 @@ final class OverlayController {
 
     private func selectElement(at point: CGPoint) async {
         // Hit-test again at the click point, so a stale hover result is never used.
-        guard let target = await resolve(point, dom: true) else { return }
+        let session = generation
+        guard let target = await resolve(point, dom: true), session == generation, isVisible else { return }
         guard case .hovering = state else { return }
         freeze(target)
     }
@@ -167,6 +187,7 @@ final class OverlayController {
     }
 
     private func selectRegion(_ rect: CGRect) async {
+        let session = generation
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let target: Target
         if let (app, window) = await reader.window(at: center) {
@@ -177,10 +198,12 @@ final class OverlayController {
                 mode: .region, app: AppInfo(name: "Desktop", bundleId: nil, pid: 0),
                 window: WindowInfo(title: nil, id: 0, frame: screen), frame: rect)
         }
+        guard session == generation, isVisible else { return }
         freeze(target)
     }
 
     private func freeze(_ target: Target) {
+        hide(reason: "target-selected")
         state = .frozen(target)
         redraw()
         NSCursor.arrow.set()
@@ -219,7 +242,7 @@ final class OverlayPanel: NSPanel {
     }
 
     /// A click while hovering may make the panel key, so Esc reaches it. Never while frozen:
-    /// the comment panel in Annotator keeps the focus, and Ofide's dictation pastes there.
+    /// the comment panel in Annotator keeps the focus, and Operator's dictation pastes there.
     override var canBecomeKey: Bool {
         if case .frozen = controller.state { return false }
         return true
@@ -228,6 +251,7 @@ final class OverlayPanel: NSPanel {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, event.keyCode == 53 {
+            controller.hide(reason: "escape")
             controller.onEscape?()
             return
         }

@@ -54,7 +54,7 @@ Builds:
 ## Limits
 
 The GUI tool returned “Computer Use was not approved to use Annotator”. Live
-click-through, capture of other apps, real Ofide paste, multiple displays and
+click-through, capture of other apps, real Operator paste, multiple displays and
 full-screen placement were not verified. The demos validate rendering; core
 and fixture tests validate the covered workflows. Comment panels retain the
 old all-applications/all-spaces collection behavior.

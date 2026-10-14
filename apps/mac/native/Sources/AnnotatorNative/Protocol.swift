@@ -68,7 +68,7 @@ final class Helper {
         overlay.onClickWhileFrozen = { point in
             emit(["type": "clickWhileFrozen", "x": point.x, "y": point.y])
         }
-        overlay.onEscape = { emit(["type": "escape"]) }
+        overlay.onEscape = { [weak self] in self?.overlay.hide(reason: "escape"); emit(["type": "escape"]) }
     }
 
     func receive(_ line: String) {
@@ -106,6 +106,7 @@ final class Helper {
     /// The overlay froze on `target`. Capture before Annotator shows the panel,
     /// so the image shows what the user clicked; then send the record.
     private func select(_ target: Target) {
+        let generation = overlay.generation
         Task {
             var capture: Capture.Result?
             var captureError: String?
@@ -114,7 +115,7 @@ final class Helper {
             } catch {
                 captureError = "\(error)"
             }
-            guard overlay.isVisible else { return }
+            guard generation == overlay.generation else { return }
             let annotation = Annotation(
                 comment: "", target: target, screenSize: capture?.screenSize ?? .zero,
                 screenshot: capture?.dataURL, project: nil)
@@ -138,5 +139,24 @@ final class Helper {
                 "captureError": captureError ?? NSNull(),
             ])
         }
+    }
+}
+
+/// Fixed reasons only; no target, transcript, token or response data.
+func logOverlayRelease(_ reason: String) {
+    let directory = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/com.nckrtl.annotator")
+    let file = directory.appendingPathComponent("overlay.log")
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 256_000 {
+        try? FileManager.default.removeItem(at: file)
+    }
+    if !FileManager.default.fileExists(atPath: file.path) {
+        FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600])
+    }
+    if let handle = try? FileHandle(forWritingTo: file) {
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data("\(Date().ISO8601Format()) overlay-release \(reason)\n".utf8))
     }
 }

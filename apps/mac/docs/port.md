@@ -17,7 +17,8 @@ Replies: `{"id":"uuid","result":...}` or `{"id":"uuid","error":"message"}`.
 Events: `{"event":"state","payload":...}`. Events and replies can interleave;
 request IDs match replies. Commands and camelCase argument names remain stable.
 Malformed arguments and unknown commands return errors. Host requests time out
-after 135 seconds, including Ofide's long transcription stop. EOF stops the core
+after 135 seconds by default. Dictation wraps these requests in independent
+5-second deadlines (18 seconds for stop) and cancels abandoned continuations. EOF stops the core
 and the capture helper. Logs go to stderr and the existing log file, never stdout.
 
 UI events, in addition to the state and comment events below:
@@ -27,7 +28,8 @@ UI events, in addition to the state and comment events below:
 - `show-comment {x,y,width,height}` uses global top-left points; `hide-comment`
   invalidates pending placement. `hide-menu` hides the menu-bar window.
 - `register-hotkey {slot,keyCode,modifiers}` and `unregister-hotkey <slot>` are
-  handled on the main thread. Slot 1 toggles, slot 2 is Escape while hovering.
+  handled on the main thread. Slot 1 toggles, slot 2 is Escape during selection and while a comment is open. Escape closes
+  the local panel immediately, then cancels dictation and tells the core to stop.
 - Host sends `hotkey_pressed {slot}` and `hotkey_error {message}`.
 - Host sends `menu_opened` to refresh permissions and projects.
 - `comment_origin {target,screens,mouse,size}` returns `[x,y]` in AppKit points.
@@ -62,8 +64,9 @@ Events:
 | --- | --- | --- |
 | `online` | | ready |
 | `permissions` | `accessibility, screenRecording: bool` | |
-| `selected` | see below | the user clicked an element, a window or dragged a region; the capture is done; the overlay is frozen |
+| `selected` | see below | the user clicked an element, a window or dragged a region; the capture is done; the overlay was removed before capture |
 | `clickWhileFrozen` | `x, y` | a click on the overlay while frozen (comment panel open) |
+| `overlay-timeout` | | the helper released its overlay after 15 s without input |
 | `escape` | | Esc while the overlay has focus (backup for the Carbon Esc hotkey) |
 | `log` | `message` | |
 | `error` | `message` | |
@@ -86,7 +89,7 @@ while the comment panel is open.
 Persisted state:
 - Settings: `~/Library/Application Support/com.nckrtl.annotator/settings.json`. Fields and
   defaults from `src-tauri/src/settings.rs` in camelCase: `serverAutoStart, serverURL,
-  ofideEnabled, ofideAutoStart, ofideURL, ofideApp, t3Enabled, t3Endpoint, t3Effort, t3Home,
+  operatorEnabled, operatorAutoStart, t3Enabled, t3Endpoint, t3Effort, t3Home,
   t3WindowHome, t3Nudge, t3DefaultModel, hotkey {keyCode, modifiers (Carbon flags)}`.
 - Conn sessions: `…/com.nckrtl.annotator/sessions.json` (the former `t3Sessions` value).
 - Projects: `~/.config/annotator/routes.json`, same format as `src-tauri/src/projects.rs`.
@@ -139,7 +142,9 @@ Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|
 
 Comment: `submit_comment {text}` (closes the panel at once, posts in the background),
 `cancel_comment`, `comment_finish_done {submit, text}`, `ofide {action: "status"|"start"|"stop"|"cancel"}`
-(proxies `OfideClient.swift`; returns its JSON or an error string).
+(proxies the live `src-tauri/src/ofide.rs`; returns its JSON or an error string).
+`release_overlay` preserves the draft and ends selection. `stop_annotating` also
+closes the comment. The internal `ofide` command name is retained.
 
 Settings: `get_settings`, `save_settings {settings}` (re-registers the hotkey, restarts the queue
 when the URL changed), `hotkey_recording {recording: bool}` (unregister the toggle hotkey while the
@@ -158,17 +163,17 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 ### Flows (port from `AppController.swift`)
 - Toggle (hotkey, menu): without both permissions open onboarding; else `annotate on`,
   register Esc; menu bar icon shows annotating.
-- `selected` → unregister Esc, remember the record, open the comment panel next to `frame`
-  (below, else above, else near the cursor, clamped to the screen; `CommentPanel.swift`).
-- Submit → fill comment and project (`Projects.swift` rules on the record's bundle id, window
-  title and url), save to the retry store, POST (`Submitter.swift`), hide the panel, `resume`,
-  register Esc.
-- `clickWhileFrozen` → emit `comment-finish`; on `comment_finish_done` submit (if text) or drop,
-  then `selectAt`.
+- `selected` → release the overlay, remember the record, keep Escape registered,
+  open the activating comment panel next to `frame`.
+- Submit → fill comment and project, save to the retry store, POST, hide the panel,
+  unregister Escape. Start a new selection with the hotkey or menu.
+- Escape → close the panel immediately, cancel dictation, end selection.
+- The old `resume`/`selectAt`/`clickWhileFrozen` protocol remains for compatibility;
+  normal comments no longer use it or keep a full-screen click target.
 - Queue: SSE + polling (`QueueMonitor.swift`); retry pending when reachable; Conn nudges
   (`T3Sessions.nudge`).
-- Tray: icon `highlighter` (template), plus the open count as the tray title; while annotating
-  use a second template icon. The health colour shows in the menu's first line.
+- Menu bar: `pencil.tip.crop.circle`, with its filled variant during selection,
+  and the open count. Identity and signing remain unchanged.
 
 ## 3. SwiftUI views
 
@@ -177,13 +182,13 @@ which preserves the queue's timeline rather than sorting comments alphabetically
 Search, filters, screenshots, copy and confirmed deletion live here. Settings,
 Projects and the menu provide server controls, retries, failed files, Conn sessions
 and agent prompts. The editor preserves project order because routing uses the
-first match. All saved JSON shapes and locations stay the same.
+first match. Saved locations stay the same. Dictation setting keys migrate as described in AGENTS.md.
 
 The comment owns one `Dictation` session. Start/stop/cancel stay serialized in
 Rust; Swift also waits for an old cancellation before starting a new recording.
 A session generation rejects late responses. Submit waits for start, then stop,
 then a changed and settled text field. A missing paste or silence keeps the
-comment open. Ofide cancellation closes it. Return submits, Shift-Return inserts
+comment open with an editable field and no blocking overlay. Operator cancellation closes it. Return submits, Shift-Return inserts
 a line, and marked text keeps input-method composition. Escape cancels.
 
 `ANNOTATOR_UI_DEMO=1` works only in debug builds. It uses made-up data and starts

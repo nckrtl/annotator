@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:29703/annotations";
 pub const OFIDE: &str = "com.nckrtl.ofide";
-pub const OFIDE_DEV: &str = "com.nckrtl.ofide.dev";
+pub const OPERATOR_URL: &str = "http://127.0.0.1:12321";
 
 /// Carbon modifier flags, as `RegisterEventHotKey` takes them.
 pub const CMD: u32 = 1 << 8;
@@ -88,12 +88,10 @@ pub struct Settings {
     pub server_auto_start: bool,
     #[serde(rename = "serverURL")]
     pub server_url: String,
+    #[serde(rename = "operatorEnabled", alias = "ofideEnabled")]
     pub ofide_enabled: bool,
+    #[serde(rename = "operatorAutoStart", alias = "ofideAutoStart")]
     pub ofide_auto_start: bool,
-    #[serde(rename = "ofideURL")]
-    pub ofide_url: String,
-    /// `com.nckrtl.ofide` or `com.nckrtl.ofide.dev`.
-    pub ofide_app: String,
     pub t3_enabled: bool,
     /// The Conn server that runs the sessions.
     pub t3_endpoint: String,
@@ -116,8 +114,6 @@ impl Default for Settings {
             server_url: DEFAULT_SERVER_URL.into(),
             ofide_enabled: true,
             ofide_auto_start: true,
-            ofide_url: ofide_default_url(OFIDE).into(),
-            ofide_app: OFIDE.into(),
             t3_enabled: true,
             t3_endpoint: "http://127.0.0.1:3780".into(),
             t3_effort: "medium".into(),
@@ -128,10 +124,6 @@ impl Default for Settings {
             hotkey: Hotkey::STANDARD,
         }
     }
-}
-
-pub fn ofide_default_url(app: &str) -> &'static str {
-    if app == OFIDE_DEV { "http://127.0.0.1:12322" } else { "http://127.0.0.1:12321" }
 }
 
 pub fn home() -> PathBuf {
@@ -162,15 +154,31 @@ impl Settings {
         service_url::parse(&self.server_url)
     }
 
-    /// Ofide carries the Local API token, so its URL must be on this machine.
+    /// Operator carries the Local API token, so its URL must be on this machine.
     pub fn ofide(&self) -> Option<url::Url> {
-        service_url::loopback(&self.ofide_url)
+        service_url::loopback(OPERATOR_URL)
     }
 
     /// A missing file gives the defaults. A broken file is kept aside, so it is never lost silently.
     pub fn load(file: &Path) -> Settings {
         let Ok(data) = std::fs::read(file) else { return Settings::default() };
-        match serde_json::from_slice(&data) {
+        let parsed = (|| -> Result<Settings, serde_json::Error> {
+            let mut value: serde_json::Value = serde_json::from_slice(&data)?;
+            let original = value.clone();
+            if let Some(fields) = value.as_object_mut() {
+                for (old, new) in [("ofideEnabled", "operatorEnabled"), ("ofideAutoStart", "operatorAutoStart")] {
+                    if let Some(choice) = fields.remove(old) { fields.entry(new).or_insert(choice); }
+                }
+                fields.remove("ofideApp"); fields.remove("ofideURL");
+            }
+            let settings = serde_json::from_value(value.clone())?;
+            if value != original {
+                // Keep unrelated/unknown preferences; only the retired dictation keys migrate.
+                if let Err(error) = write_atomic(file, &serde_json::to_vec_pretty(&value)?) { crate::log(&error); }
+            }
+            Ok(settings)
+        })();
+        match parsed {
             Ok(settings) => settings,
             Err(error) => {
                 let aside = file.with_extension("json.broken");
@@ -189,9 +197,7 @@ impl Settings {
     /// Applies an edit like SettingsView.apply: invalid URLs and an invalid shortcut keep the old value.
     pub fn merged(&self, mut new: Settings) -> Settings {
         if new.server().is_none() { new.server_url = self.server_url.clone(); }
-        if new.ofide().is_none() { new.ofide_url = self.ofide_url.clone(); }
         if !new.hotkey.is_valid() { new.hotkey = self.hotkey; }
-        if new.ofide_app != OFIDE && new.ofide_app != OFIDE_DEV { new.ofide_app = self.ofide_app.clone(); }
         new
     }
 }
@@ -211,6 +217,30 @@ pub fn write_atomic(file: &Path, data: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_retired_app_without_losing_choices() {
+        for enabled in [false, true] {
+            let dir = crate::testutil::temp_dir("operator-migration");
+            let file = dir.join("settings.json");
+            write_atomic(&file, serde_json::json!({
+                "ofideEnabled": enabled, "ofideAutoStart": false,
+                "ofideURL": "http://127.0.0.1:12322", "ofideApp": "com.nckrtl.ofide.dev",
+                "t3Nudge": true, "unusedAppearance": "keep"
+            }).to_string().as_bytes()).unwrap();
+            let settings = Settings::load(&file);
+            assert_eq!(settings.ofide_enabled, enabled);
+            assert!(!settings.ofide_auto_start);
+            assert!(settings.t3_nudge);
+            assert_eq!(settings.ofide().unwrap().as_str(), "http://127.0.0.1:12321/");
+            let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            assert_eq!(saved["operatorEnabled"], enabled);
+            assert_eq!(saved["unusedAppearance"], "keep");
+            for old in ["ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp"] { assert!(saved.get(old).is_none()); }
+            assert_eq!(Settings::load(&file), settings);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
 
     #[test]
     fn display() {
@@ -244,7 +274,7 @@ mod tests {
         let saved: Settings = serde_json::from_str(r#"{"t3Nudge":true}"#).unwrap();
         assert!(saved.t3_nudge);
         let json = serde_json::to_value(Settings::default()).unwrap();
-        for key in ["serverAutoStart", "serverURL", "ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp",
+        for key in ["serverAutoStart", "serverURL", "operatorEnabled", "operatorAutoStart",
             "t3Enabled", "t3Endpoint", "t3Effort", "t3Home", "t3WindowHome", "t3Nudge", "t3DefaultModel"] {
             assert!(json.get(key).is_some(), "{key}");
         }
@@ -256,12 +286,10 @@ mod tests {
         let old = Settings::default();
         let mut new = old.clone();
         new.server_url = "http://example.com/annotations".into();
-        new.ofide_url = "https://example.com".into();
         new.hotkey = Hotkey { key_code: 1, modifiers: SHIFT };
         new.t3_nudge = true;
         let merged = old.merged(new);
         assert_eq!(merged.server_url, DEFAULT_SERVER_URL);
-        assert_eq!(merged.ofide_url, "http://127.0.0.1:12321");
         assert_eq!(merged.hotkey, Hotkey::STANDARD);
         assert!(merged.t3_nudge);
     }

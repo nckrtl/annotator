@@ -19,7 +19,7 @@ pub fn parse(text: &str) -> Option<Url> {
     Some(url)
 }
 
-/// `parse`, and the host must be this machine. Ofide's token never leaves the Mac.
+/// `parse`, and the host must be this machine. Operator's token never leaves the Mac.
 pub fn loopback(text: &str) -> Option<Url> {
     parse(text).filter(|url| url.host().is_some_and(|host| is_loopback(&host)))
 }

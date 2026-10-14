@@ -1,6 +1,6 @@
 //! The Swift helper (native/): Accessibility, the overlay and screen capture. JSON lines both
 //! ways: commands on its stdin ({"action": …}), events on its stdout ({"type": …}); app.rs
-//! handles the events. A helper that stops on its own restarts after 0.5, 2 and 5 s (as Ofide's
+//! handles the events. A helper that stops on its own restarts after 0.5, 2 and 5 s (as Operator's
 //! supervisor.rs); a fourth stop within a minute gives up until the next command starts it.
 
 use serde_json::Value;

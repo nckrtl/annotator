@@ -6,5 +6,5 @@ bash scripts/build-app.sh --debug
 output=${1:-"$PWD/Snapshots/designkit"}
 mkdir -p "$output"
 ANNOTATOR_UI_DEMO=1 ANNOTATOR_UI_SNAPSHOTS="$output" build/debug/Annotator.app/Contents/MacOS/Annotator
-swift build --package-path native
-ANNOTATOR_OVERLAY_SNAPSHOTS="$output" native/.build/debug/AnnotatorNative
+swift build --package-path native --scratch-path build/swift-native
+ANNOTATOR_OVERLAY_SNAPSHOTS="$output" build/swift-native/debug/AnnotatorNative
