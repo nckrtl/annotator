@@ -295,6 +295,8 @@ final class OverlayPanel: NSPanel {
         acceptsMouseMovedEvents = true
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
+        // Panels zoom in by default. The frozen screen must appear in place, with no motion.
+        animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         setFrame(screen.frame, display: false)
         contentView = OverlayView(controller: controller)
