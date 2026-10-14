@@ -55,6 +55,7 @@ struct AnnotationList: View {
     @State private var clear = false
     @State private var archive: String?
     @State private var deleteMarked = false
+    @State private var deleting: String?
     var body: some View {
         ScrollViewReader { proxy in
             KitScrollView {
@@ -75,7 +76,7 @@ struct AnnotationList: View {
                                 .frame(width: 26, height: 26).background(Color.kitTile, in: RoundedRectangle(cornerRadius: 7))
                         } trailing: {
                             KitIconImage(item["question"].bool ? .warning : item["status"].string == "done" ? .done : item["status"].string == "todo" ? .clock : .sync, size: 12).foregroundStyle(.secondary)
-                        }.id(item["id"].string)
+                        }.contextMenu { AnnotationMenu { deleting = item["id"].string } }.id(item["id"].string)
                     }
                 }.padding(Kit.columnMargin).padding(.bottom, 28)
             }
@@ -107,6 +108,7 @@ struct AnnotationList: View {
                 }.padding(.leading, Kit.columnContent).padding(.trailing, Kit.columnMargin).frame(height: Kit.containerBarHeight)
             }
         }
+        .annotationDeleteDialog(model, id: $deleting)
         .confirmationDialog(archiveTitle, isPresented: Binding(get: { archive != nil }, set: { if !$0 { archive = nil } })) {
             Button("Archive", role: .destructive) { delete(archiving.map { $0["id"].string }); archive = nil }
         } message: { Text("Archiving deletes them from the server.") }

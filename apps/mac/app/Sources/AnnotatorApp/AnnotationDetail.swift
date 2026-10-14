@@ -3,13 +3,24 @@ import AppKit
 import DesignKit
 import AnnotatorCore
 
+struct AnnotationMenu: View {
+    let delete: () -> Void
+    var body: some View { Button("Delete annotation…", role: .destructive, action: delete) }
+}
+extension View {
+    func annotationDeleteDialog(_ model: AppModel, id: Binding<String?>) -> some View {
+        confirmationDialog("Delete this annotation?", isPresented: Binding(get: { id.wrappedValue != nil }, set: { if !$0 { id.wrappedValue = nil } })) {
+            Button("Delete", role: .destructive) { if let id = id.wrappedValue { model.act("delete_annotation", ["id": .string(id)]) } }
+        }
+    }
+}
 struct AnnotationDetail: View {
     @Bindable var model: AppModel
     @State private var screenshot: NSImage?
     @State private var screenshotError: String?
     @State private var loading = false
     @State private var lightbox = false
-    @State private var deleting = false
+    @State private var deleting: String?
     @State private var copied = false
     var body: some View {
         Group {
@@ -33,7 +44,7 @@ struct AnnotationDetail: View {
                     PageBar(title: "Annotation #\(item["number"].int)") {
                         KitToolbarGroup {
                             KitToolbarButton(icon: copied ? .check : .copy, help: copied ? "Copied" : "Copy comment") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item["comment"].string, forType: .string); copied = true }
-                            KitToolbarMenu { Button("Delete annotation…", role: .destructive) { deleting = true } }
+                            KitToolbarMenu { AnnotationMenu { deleting = item["id"].string } }
                         }
                     }
                 }
@@ -56,9 +67,7 @@ struct AnnotationDetail: View {
             if let screenshot { ScreenshotView(image: screenshot) { lightbox = false } }
 
         }
-        .confirmationDialog("Delete this annotation?", isPresented: $deleting) {
-            Button("Delete", role: .destructive) { model.act("delete_annotation", ["id": .string(model.selected)]) }
-        }
+        .annotationDeleteDialog(model, id: $deleting)
     }
     private func properties(_ item: JSON) -> [(String, String)] {
         var rows = [("Status", AnnotationCollection.statusTitle(item["status"].string)), ("Project", item["native"]["project"].string), ("Element", item["element"].string), ("Component", item["component"].string), ("React", item["react"].string), ("Selector", item["native"]["dom"]["selector"].string), ("Path", item["elementPath"].string), ("URL", item["url"].string), ("Window", item["pathname"].string), ("App", item["native"]["app"]["name"].string), ("Bundle ID", item["native"]["app"]["bundleId"].string), ("Mode", item["native"]["mode"].string.capitalized), ("Screen", item["screenSize"].string)]

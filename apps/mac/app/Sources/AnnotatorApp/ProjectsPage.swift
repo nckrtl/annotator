@@ -59,6 +59,7 @@ struct ProjectsPage: View {
                         EntryListRow(title: project["name"].string, subtitle: projectSubtitle(project), selected: model.selectedProjectID == project["id"].string || model.marked.contains(project["id"].string)) {
                             pick(project["id"].string)
                         } icon: { ProjectIcon() } trailing: { EmptyView() }
+                        .contextMenu { ProjectMenu(model: model, project: project) { deleting = project } }
                         .id(project["id"].string)
                     }
                 }.padding(Kit.columnMargin).padding(.bottom, 28)
@@ -159,19 +160,29 @@ private struct ProjectDetail: View {
                 Spacer(minLength: 8)
                 KitToolbarGroup {
                     KitToolbarButton("Edit", action: edit)
-                    KitToolbarMenu {
-                        Button("Copy agent prompt") { model.act("copy_prompt", ["scope": project["id"]]) }
-                        Divider()
-                        Button("Route earlier") { reorder(-1) }.disabled(position == 0)
-                        Button("Route later") { reorder(1) }.disabled(position == model.projects.count - 1)
-                        Divider()
-                        Button("Delete project…", role: .destructive, action: delete)
-                    }
+                    KitToolbarMenu { ProjectMenu(model: model, project: project, delete: delete) }
                 }.disabled(model.projectsSaving || !model.projectsError.isEmpty)
             }.padding(.horizontal, Kit.columnMargin).frame(height: Kit.containerBarHeight)
         }
     }
     private func rules(_ key: String) -> String { project[key].array.isEmpty ? "Not set" : project[key].array.map(\.string).joined(separator: "\n") }
+}
+
+struct ProjectMenu: View {
+    @Bindable var model: AppModel
+    let project: JSON
+    let delete: () -> Void
+    private var position: Int { model.projects.firstIndex { $0["id"] == project["id"] } ?? 0 }
+    var body: some View {
+        Group {
+            Button("Copy agent prompt") { model.act("copy_prompt", ["scope": project["id"]]) }
+            Divider()
+            Button("Route earlier") { reorder(-1) }.disabled(position == 0)
+            Button("Route later") { reorder(1) }.disabled(position == model.projects.count - 1)
+            Divider()
+            Button("Delete project…", role: .destructive, action: delete)
+        }.disabled(model.projectsSaving || !model.projectsError.isEmpty)
+    }
     private func reorder(_ direction: Int) {
         guard model.projects.indices.contains(position + direction) else { return }
         var projects = model.projects; projects.swapAt(position, position + direction)
