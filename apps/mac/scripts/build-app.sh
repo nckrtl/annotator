@@ -3,6 +3,8 @@
 # --debug: a local ad-hoc bundle for testing; never installs it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/vm-build-cleanup.sh
+trap 'vm_build_cleanup "$?" "$PWD/build/swift-app" "$PWD/build/rust" "$PWD/build/swift-native"' EXIT
 configuration=release
 if [[ ${1:-} == --debug ]]; then configuration=debug; fi
 if [[ $configuration == release ]]; then
