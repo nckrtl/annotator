@@ -71,8 +71,8 @@ helper. Read this file before you change it.
 4. **Region mode.** Hold ⌥ while dragging to annotate a free rectangle instead
    of an element. Use it for canvas apps, games and other UI without
    accessibility data.
-5. **Comment.** On click, freeze the highlight and show a comment panel next
-   to the element. It must be able to become key, because Ofide's dictation
+5. **Comment.** On click, remove the full-screen overlay and show a comment panel next
+   to the element. It must be able to become key, because Operator's dictation
    pastes into the focused field. ⌘↩ submits, Esc cancels. Optional dictation
    button: see Dictation.
 6. **Capture.** Use ScreenCaptureKit, with `SCScreenshotManager` and an
@@ -159,13 +159,39 @@ existing agents already read; keep their meaning. The `native` object is new.
 
 ## Dictation
 
-Same contract as the web annotator: Ofide's local API. Production is
-`http://127.0.0.1:12321`, Ofide Dev is `http://127.0.0.1:12322`
-(configurable). `POST /dictate` starts recording; `POST /dictate-stop` stops
-it, transcribes, and pastes into the focused field (200 when pasted; 409 means
-no active dictation; 422 means silence). The comment field must be focused and
-the app frontmost when the paste lands. See `~/apps/ofide/README.md` for the
-full API. If Ofide is not running, show that next to the button.
+Operator is the only dictation app. Its held identity is `com.nckrtl.ofide`, its
+Local API is fixed at `http://127.0.0.1:12321`, and its token stays in
+`~/Library/Application Support/com.nckrtl.ofide/control.json`. Never select the
+retired Dev app or send that token to another endpoint. The `X-Ofide-Token` header
+is part of the existing API and keeps its name.
+
+`POST /dictate/start` with `{"paste":true}` starts recording; `/dictate-stop`
+waits for paste dispatch (200), no dictation/focus change (409), or silence (422).
+`POST /dictate/cancel` cancels. `/status` carries `status`, `cancelledAt` (epoch
+milliseconds), and `error`; an HTTP 200 status can still report a worker error.
+The native contract is in `~/apps/ofide/mac/app/Core/Sources/OperatorCore/Control`.
+
+The helper removes its full-screen panels at selection, before capture starts.
+The comment uses an activating key panel. Before start and stop, verify that
+Annotator is frontmost and the editable text view is its first responder. Operator
+pins the frontmost PID at recording start. A 200 stop reply does not prove the
+paste reached the comment: wait for changed, settled text for at most three seconds.
+
+Escape closes the comment and ends selection; it never resumes a blocking overlay.
+Annotator retains its global Escape shortcut through the comment. API errors stay
+beside the field, which remains editable. Every dictation exit releases the overlay
+before background cancellation. HTTP limits: status 2 s, start 4 s, cancel 3 s,
+stop 15 s. Swift independently bounds calls at 5 s (stop 18 s), stalled preparation
+or transcription at 20 s, and a recording at 120 s. The helper closes after 15 s
+without input, with a background exit backstop after one more second if its main
+actor cannot run. EOF and parent exit also stop the helper.
+
+`operatorEnabled` and `operatorAutoStart` preserve the old `ofideEnabled` and
+`ofideAutoStart` choices. Loading settings writes the new keys and discards the
+old app/URL keys, including saved Dev endpoints. No app picker or editable API URL
+remains. Dictation steps and overlay-release reasons go to `dictation.log` and
+`overlay.log` under Annotator's Application Support folder, with bounded file sizes.
+They contain step codes and focus PIDs, never tokens, response bodies, or comment text.
 
 ## Permissions
 
@@ -196,9 +222,8 @@ use another checkout. Do not copy its controls into this repository.
   uses `KitGroup` and `KitRow`. The project editor is a `KitSheet`.
 - Menu: SwiftUI `MenuBarExtra` with window style. Library, Projects and Settings
   provide the full queue, server and agent controls.
-- Comment: SwiftUI hosted in a key-capable AppKit `NSPanel`, above the capture
-  overlay and visible over full-screen apps. `NSTextView` preserves input methods,
-  Ofide paste, Return to submit, Shift-Return for a line, and Escape to cancel.
+- Comment: SwiftUI hosted in an activating, key-capable AppKit `NSPanel` and visible over full-screen apps. `NSTextView` preserves input methods,
+  Operator paste, Return to submit, Shift-Return for a line, and Escape to cancel.
 - Permissions: a frosted SwiftUI prompt in an AppKit window.
 - Overlay: keep the existing AppKit panels, hit testing, region selection and
   ScreenCaptureKit capture. Its neutral outline has a contrasting halo, so it
@@ -221,7 +246,7 @@ docs/port.md          # process contracts
 ```
 
 Rust keeps settings, HTTP, SSE/polling, queue, pending/retry storage, routing,
-Conn, Keychain and Ofide serialization. It imports neither SwiftUI nor AppKit.
+Conn, Keychain and Operator serialization. It imports neither SwiftUI nor AppKit.
 `AnnotatorCore` keeps JSON framing, the pipe client and dictation lifecycle;
 it imports neither SwiftUI nor AppKit. Only the UI target owns windows, Carbon
 shortcuts, focus and file pickers.
@@ -263,7 +288,7 @@ read-only repository secret), and sets `DESIGN_KIT_PATH` to that checkout.
 ## Verification
 
 - `scripts/test.sh`: capture geometry and redaction; Rust HTTP/queue/retry,
-  routing, Conn and Ofide; Swift pipe framing and dictation races.
+  routing, Conn and Operator; Swift pipe framing and dictation races.
 - `scripts/smoke-core.py`: real Rust core, temporary home and loopback server,
   controlled helper fixture. Tests saved settings, permission and hotkey events,
   capture-to-submit, routing, screenshots, live queue, offline retry, deletion,
@@ -274,7 +299,7 @@ read-only repository secret), and sets `DESIGN_KIT_PATH` to that checkout.
   current-process API captures the actual windows, including glass and native
   chrome, without a Screen Recording grant.
 - Real capture and dictation still require granted macOS permissions and a
-  running Ofide. Check hover/click, Option-drag, Escape, paste-before-submit,
+  running Operator. Check hover/click, Option-drag, Escape, paste-before-submit,
   multi-display placement and full-screen panels on a signed installation.
 
 Logs: `~/Library/Logs/Annotator/annotator.log`. Settings:
@@ -285,7 +310,7 @@ Logs: `~/Library/Logs/Annotator/annotator.log`. Settings:
 Phase 1 is implemented: menu bar item, hotkey, permission onboarding,
 overlay with element highlight and window fallback, region mode, comment panel,
 capture, POST with local retry, live queue counts in the menu, settings
-(server URL, hotkey, Ofide URL). Dictation button if it stays small.
+(server URL, hotkey, Operator dictation). Dictation button if it stays small.
 
 Possible follow-ups (project routing is already implemented):
 - Pins: numbered markers for open annotations, shown on the overlay over the

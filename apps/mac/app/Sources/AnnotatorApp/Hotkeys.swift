@@ -17,7 +17,8 @@ import AnnotatorCore
             let slot = Int(id.id)
             MainActor.assumeIsolated {
                 let keys = Unmanaged<Hotkeys>.fromOpaque(context).takeUnretainedValue()
-                keys.model.act("hotkey_pressed", ["slot": .number(Double(slot))])
+                if slot == 2 { keys.model.cancelComment() }
+                else { keys.model.act("hotkey_pressed", ["slot": .number(Double(slot))]) }
             }
             return noErr
         }, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &handler)

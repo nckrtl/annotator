@@ -39,19 +39,36 @@ import AnnotatorCore
                     try? await Task.sleep(for: .milliseconds(200))
                     if generation == commentGeneration { model.startDictation() }
                 }
-            } catch { model.error = error.localizedDescription; model.act("cancel_comment") }
+            } catch { model.error = error.localizedDescription; model.cancelComment() }
         }
     }
 
-    private func makeComment() -> NSPanel {
-        let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    /// Native Operator captures the workspace PID at start. Key status alone is insufficient.
+    func prepareDictation() async throws {
+        focusComment()
+        for _ in 0..<20 {
+            try Task.checkCancellation()
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
+               NSApp.isActive, let panel = commentPanel, panel.isKeyWindow,
+               let field = panel.firstResponder as? NSTextView, field.isEditable {
+                DictationLog.write("dictation-focus-confirmed pid=\(getpid()) workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        DictationLog.write("dictation-focus-failed pid=\(getpid()) workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1) active=\(NSApp.isActive) key=\(commentPanel?.isKeyWindow ?? false)")
+        throw BridgeError("The comment field could not get focus. Click it and try again, or type your comment.")
+    }
+
+    func makeComment() -> NSPanel {
+        let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320), styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 2)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .canJoinAllApplications]
         panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.contentView = NSHostingView(rootView: CommentView(model: model).kitAppearance())
         commentPanel = panel; return panel
     }
-    func focusComment() { commentPanel?.makeKeyAndOrderFront(nil); NSApp.activate(); NotificationCenter.default.post(name: .focusComment, object: nil) }
+    func focusComment() { NSApp.activate(ignoringOtherApps: true); commentPanel?.makeKeyAndOrderFront(nil); NotificationCenter.default.post(name: .focusComment, object: nil) }
 }
 final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true }; override var canBecomeMain: Bool { false } }
 extension Notification.Name { static let focusComment = Notification.Name("focus-comment") }
@@ -135,7 +152,7 @@ struct MenuPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitIconButton(.settings, help: "Settings") { model.navigate("settings") }.accessibilityLabel("Settings") }
-                Button { model.act("toggle_annotating") } label: { HStack { Text(model.state["annotating"].bool ? "Stop annotating" : "Annotate screen"); Spacer(); KitKeyCap(model.state["hotkey"]["display"].string) } }.buttonStyle(.kitPrimary)
+                Button { model.act("toggle_annotating") } label: { HStack { Text(model.isAnnotating ? "Stop annotating" : "Annotate screen"); Spacer(); KitKeyCap(model.state["hotkey"]["display"].string) } }.buttonStyle(.kitPrimary)
                 if model.state["health"]["tone"].string == "error" { KitGroup { KitNotice(model.state["health"]["title"].string, tone: .error) } }
                 KitGroup("Recent annotations") {
                     if model.items.isEmpty { KitRow("No annotations yet") { EmptyView() } }

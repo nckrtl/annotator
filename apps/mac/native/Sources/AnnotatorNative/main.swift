@@ -20,11 +20,12 @@ MainActor.assumeIsolated {
         while let line = readLine() {
             DispatchQueue.main.async { MainActor.assumeIsolated { helper.receive(line) } }
         }
+        logOverlayRelease("core-pipe-closed")
         exit(0)
     }
     // Quit when Annotator exits.
-    let parent = DispatchSource.makeProcessSource(identifier: getppid(), eventMask: .exit, queue: .main)
-    parent.setEventHandler { exit(0) }
+    let parent = DispatchSource.makeProcessSource(identifier: getppid(), eventMask: .exit, queue: .global())
+    parent.setEventHandler { logOverlayRelease("core-exited"); exit(0) }
     parent.resume()
 
     emit(["type": "online"])

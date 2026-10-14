@@ -21,7 +21,7 @@ import ScreenCaptureKit
     }
     static func populate(_ model: AppModel) {
         #if DEBUG
-        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"ofideEnabled":true,"ofideAutoStart":true,"ofideApp":"com.nckrtl.ofide","ofideURL":"http://127.0.0.1:12321","t3Enabled":true,"t3Endpoint":"http://127.0.0.1:3780","t3Home":"~/.t3/headless","t3WindowHome":"~/.t3/desktop-dev","t3Nudge":false,"t3DefaultModel":"claudeAgent/claude-opus-5-5","t3Effort":"medium","hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
+        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"operatorEnabled":true,"operatorAutoStart":true,"t3Enabled":true,"t3Endpoint":"http://127.0.0.1:3780","t3Home":"~/.t3/headless","t3WindowHome":"~/.t3/desktop-dev","t3Nudge":false,"t3DefaultModel":"claudeAgent/claude-opus-5-5","t3Effort":"medium","hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
         var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); project["id"] = .string("website"); project["notes"] = .string("Run the local website before checking annotations.")
         var native = newProject(); native["id"] = .string("desktop"); native["name"] = .string("Desktop app"); native["root"] = .string("~/Projects/desktop"); native["bundleIds"] = .array([.string("com.example.desktop")])
         var docs = newProject(); docs["id"] = .string("docs"); docs["name"] = .string("Documentation"); docs["urlPrefixes"] = .array([.string("https://docs.example.com")])
@@ -113,7 +113,10 @@ import ScreenCaptureKit
             model.demoDictation = "recording"
             await shot(comment, "\(appearance)-15-recording", directory)
             model.demoDictation = "idle"; model.target["mode"] = .string("window"); model.commentError = "Screen capture failed. Check Screen Recording in System Settings. Your comment can still be sent."
-            await shot(comment, "\(appearance)-16-capture-error", directory); comment.close()
+            await shot(comment, "\(appearance)-16-capture-error", directory)
+            model.target["mode"] = .string("element")
+            model.comment = ""; model.commentError = "Operator sent no text to the comment. Try again or type your comment."
+            await shot(comment, "\(appearance)-16b-dictation-error", directory); comment.close()
             model.page = "all"; model.selected = ""; model.items = []; model.state["queue"] = .object(["todo": .number(0), "inProgress": .number(0), "done": .number(0)])
             await shot(window, "\(appearance)-17-empty-library", directory)
             model.page = "projects"; model.projectsError = "Could not read routes.json. Fix the file before editing projects."
@@ -131,6 +134,8 @@ import ScreenCaptureKit
             try? await Task.sleep(for: .milliseconds(250))
             scrollToBottom(window.contentView)
             await shot(window, "\(appearance)-21-settings-bottom", directory)
+            NotificationCenter.default.post(name: .demoSettingsSection, object: "dictation")
+            await shot(window, "\(appearance)-21b-settings-dictation", directory)
             NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
             try? await Task.sleep(for: .milliseconds(250))
             scrollToBottom(window.contentView)
@@ -152,8 +157,17 @@ import ScreenCaptureKit
         window.contentView = NSHostingView(rootView: view); window.center(); window.orderFrontRegardless(); return window
     }
     private static func shot(_ window: NSWindow, _ name: String, _ directory: String) async {
-        window.makeKeyAndOrderFront(nil); NSApp.activate(); try? await Task.sleep(for: .milliseconds(550))
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil); try? await Task.sleep(for: .milliseconds(550))
         do {
+            if ProcessInfo.processInfo.environment["ANNOTATOR_UI_OFFSCREEN"] == "1" {
+                guard let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+                    throw BridgeError("Could not render the demo view")
+                }
+                view.layoutSubtreeIfNeeded()
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory + "/" + name + ".png"))
+                return
+            }
             let content = try await SCShareableContent.currentProcess
             guard let ownWindow = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { throw BridgeError("Demo window is not on screen") }
             let filter = SCContentFilter(desktopIndependentWindow: ownWindow)

@@ -6,7 +6,7 @@ use crate::conn::Conn;
 use crate::geometry::Rect;
 use crate::hotkey::{self, Slot};
 use crate::local_server::{self, LocalServer};
-use crate::ofide::OfideQueue;
+use crate::ofide::OperatorQueue;
 use crate::pending::{PendingStore, Submitter};
 use crate::projects::{ProjectsStore, Routes};
 use crate::queue::{Connection, QueueMonitor};
@@ -68,7 +68,7 @@ pub struct Shared {
     pub queue: Arc<QueueMonitor>,
     pub submitter: Arc<Submitter>,
     pub conn: Arc<Conn>,
-    pub ofide: OfideQueue,
+    pub ofide: OperatorQueue,
     pub permission_waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Permissions>>>,
 }
 
@@ -125,7 +125,7 @@ pub fn setup(app: &crate::runtime::AppHandle) {
         queue,
         submitter,
         conn: Arc::new(Conn::new(crate::conn::sessions_file())),
-        ofide: OfideQueue::default(),
+        ofide: OperatorQueue::default(),
         permission_waiters: Mutex::default(),
     });
 
@@ -202,6 +202,7 @@ pub fn app_state(app: &crate::runtime::AppHandle) -> Value {
         "localServer": local,
         "queueReachable": !matches!(connection, Connection::Unreachable(_)),
         "annotating": core.annotating,
+        "commentOpen": core.comment.is_some(),
         "hotkey": {"keyCode": core.settings.hotkey.key_code, "modifiers": core.settings.hotkey.modifiers,
             "display": core.settings.hotkey.display()},
         "hotkeyError": core.hotkey_error,
@@ -395,7 +396,7 @@ pub fn register_hotkey(app: &crate::runtime::AppHandle) {
 }
 
 /// Esc is a global hotkey while hovering, so it works without taking focus from the app underneath.
-/// It is released while the comment panel is open, so Esc reaches the panel.
+/// Keep it through the comment so Operator cannot take Escape away from Annotator.
 fn register_escape(app: &crate::runtime::AppHandle) {
     let _ = hotkey::register(app, Slot::Escape, 53, 0);
 }
@@ -410,7 +411,7 @@ pub fn hotkey_pressed(app: &crate::runtime::AppHandle, slot: Slot) {
 // MARK: - Annotate mode
 
 pub fn toggle(app: &crate::runtime::AppHandle) {
-    if with(app, |core| core.annotating) { stop_annotating(app) } else { start_annotating(app) }
+    if with(app, |core| core.annotating || core.comment.is_some()) { stop_annotating(app) } else { start_annotating(app) }
 }
 
 fn start_annotating(app: &crate::runtime::AppHandle) {
@@ -430,6 +431,13 @@ fn start_annotating(app: &crate::runtime::AppHandle) {
     emit_state(app);
 }
 
+pub fn release_overlay(app: &crate::runtime::AppHandle) {
+    let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
+    let commenting = with(app, |core| { core.annotating = false; core.moving = None; core.comment.is_some() });
+    if commenting { register_escape(app); } else { hotkey::unregister(app, Slot::Escape); }
+    emit_state(app);
+}
+
 pub fn stop_annotating(app: &crate::runtime::AppHandle) {
     drop_comment(app);
     let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
@@ -438,7 +446,7 @@ pub fn stop_annotating(app: &crate::runtime::AppHandle) {
     emit_state(app);
 }
 
-/// Closes the comment panel without resuming the overlay; the view cancels Ofide.
+/// Closes the comment panel without resuming the overlay; the view cancels Operator.
 fn drop_comment(app: &crate::runtime::AppHandle) {
     let had = with(app, |core| {
         core.moving = None;
@@ -468,11 +476,7 @@ pub fn helper_event(app: &crate::runtime::AppHandle, event: Value) {
         }),
         "selected" => selected(app, event),
         "clickWhileFrozen" => move_comment(app, event["x"].as_f64().unwrap_or(0.0), event["y"].as_f64().unwrap_or(0.0)),
-        "escape" => {
-            if with(app, |core| core.annotating && core.comment.is_none()) {
-                stop_annotating(app);
-            }
-        }
+        "escape" | "overlay-timeout" => stop_annotating(app),
         "log" => crate::log(&format!("helper: {}", event["message"].as_str().unwrap_or_default())),
         "error" => {
             let message = event["message"].as_str().unwrap_or("The native helper failed.").to_string();
@@ -569,8 +573,9 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
     if !opened {
         return;
     }
+    release_overlay(app);
     let dictation = settings.ofide_enabled.then(|| json!({
-        "url": settings.ofide_url, "app": settings.ofide_app, "autoStart": settings.ofide_auto_start,
+        "autoStart": settings.ofide_auto_start,
     }));
     let target = json!({
         "label": event["label"].as_str().unwrap_or_default(),
@@ -583,9 +588,10 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
     emit_state(app);
 }
 
-/// The panel closed: hover again, and take Esc back.
+/// Close the panel. Normal selections already released the overlay.
 fn comment_closed(app: &crate::runtime::AppHandle) {
     panels::hide_comment(app);
+    hotkey::unregister(app, Slot::Escape);
     let annotating = with(app, |core| {
         core.moving = None;
         core.annotating
@@ -634,11 +640,8 @@ pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str) -> Result<(),
 }
 
 pub fn cancel_comment(app: &crate::runtime::AppHandle) {
-    if with(app, |core| core.comment.take().is_some()) {
-        comment_closed(app);
-    } else {
-        panels::hide_comment(app);
-    }
+    stop_annotating(app);
+    panels::hide_comment(app);
 }
 
 /// Like the web annotator: a click elsewhere stops dictation, waits for the paste, submits the

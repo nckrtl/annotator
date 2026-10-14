@@ -9,19 +9,19 @@ if [[ $configuration == release ]]; then
   source scripts/signing.sh
   require_signing_identity
 fi
-swift build --package-path app -c "$configuration"
+swift build --package-path app --scratch-path build/swift-app -c "$configuration"
 bash scripts/build-native.sh
 if [[ $configuration == release ]]; then
-  cargo build --manifest-path src-tauri/Cargo.toml --release
+  CARGO_TARGET_DIR="$PWD/build/rust" cargo build --manifest-path src-tauri/Cargo.toml --release
 else
-  cargo build --manifest-path src-tauri/Cargo.toml
+  CARGO_TARGET_DIR="$PWD/build/rust" cargo build --manifest-path src-tauri/Cargo.toml
 fi
 built="build/$configuration/Annotator.app"
 mkdir -p "$built/Contents/MacOS" "$built/Contents/Resources"
-bin=$(swift build --package-path app -c "$configuration" --show-bin-path)
+bin=$(swift build --package-path app --scratch-path build/swift-app -c "$configuration" --show-bin-path)
 cp "$bin/Annotator" "$built/Contents/MacOS/Annotator"
-cp src-tauri/target/"$configuration"/annotator "$built/Contents/Resources/annotator-core"
-cp src-tauri/binaries/annotator-native "$built/Contents/Resources/annotator-native"
+cp build/rust/"$configuration"/annotator "$built/Contents/Resources/annotator-core"
+cp build/helpers/annotator-native "$built/Contents/Resources/annotator-native"
 cp src-tauri/icons/icon.icns "$built/Contents/Resources/Annotator.icns"
 # SwiftPM's Xcode build backend emits resource bundles beside the executable.
 for bundle in "$bin"/*.bundle; do

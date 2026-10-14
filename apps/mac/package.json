@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bash scripts/build-app.sh --debug && open build/debug/Annotator.app",
-    "build": "swift build --package-path app",
+    "build": "swift build --package-path app --scratch-path build/swift-app",
     "native:build": "bash scripts/build-native.sh",
     "app:build": "bash scripts/build-app.sh",
     "app:install": "bash scripts/install.sh",

@@ -92,3 +92,37 @@ set `TMPDIR` to a directory under `build` for its isolated fixtures.
 The menu-bar label uses `pencil.tip.crop.circle` when idle and
 `pencil.tip.crop.circle.fill` while annotating, with the open queue count beside it.
 These native SF Symbols are Nick's requested exception to Heroicons in the app UI.
+
+## Operator and overlay recovery
+
+Use `scripts/test.sh`, `scripts/smoke-core.py`, and `scripts/check-dictation.sh`.
+The last check launches the real comment panel through LaunchServices with a fake
+API and made-up text. It checks frontmost PID, first responder, missing-paste
+recovery, typing, and Escape. It needs an unlocked VM desktop; loginwindow owning
+focus correctly fails the check before an API start. It does not record audio.
+
+`scripts/snapshots.sh` includes the Operator Settings section and the missing-paste
+error in light and dark. ScreenCaptureKit cannot capture these windows while the
+VM desktop is locked. Native Operator audio-to-paste verification additionally
+needs its helpers, models, Accessibility permission, and an unlocked desktop.
+`operator-headless` explicitly does not paste, so it cannot verify comment focus.
+
+Selection now ends when a target is picked. Its helper removes all full-screen
+panels before awaiting capture. The comment stays editable after dictation errors.
+Escape closes it and ends selection; it does not return to the full-screen overlay.
+See AGENTS.md for deadlines, migration and diagnostic log locations.
+
+The historical `src-tauri` directory is live Rust code, not a retired Tauri UI.
+`main.rs` declares `ofide.rs`, `commands.rs` dispatches its API calls, and the native
+SwiftUI app runs that executable. No dead Tauri dictation source was found or deleted.
+The internal command/module name and `X-Ofide-Token` wire header remain unchanged.
+
+For layout review while ScreenCaptureKit is unavailable, a debug demo can set
+`ANNOTATOR_UI_OFFSCREEN=1` with `ANNOTATOR_UI_SNAPSHOTS`. This uses AppKit's view
+rasterization and does not verify WindowServer composition, active switch colors,
+focus, or real paste. Label these captures as offscreen renders in any handoff.
+
+`ANNOTATOR_DICTATION_CHECK_UNFOCUSED=1 scripts/check-dictation.sh` is a separate
+fixture mode for a locked or modal desktop. It explicitly skips activation checks
+but still exercises the real text view's typing, paste, error and Escape paths.
+A successful focus run must omit this flag.

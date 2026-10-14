@@ -25,6 +25,12 @@ import AnnotatorNativeCore
                 controller.showDemo(target); background.needsDisplay = true; overlay.needsDisplay = true
                 try? await Task.sleep(for: .milliseconds(400))
                 do {
+                    if ProcessInfo.processInfo.environment["ANNOTATOR_UI_OFFSCREEN"] == "1" {
+                        guard let bitmap = background.bitmapImageRepForCachingDisplay(in: background.bounds) else { exit(1) }
+                        background.cacheDisplay(in: background.bounds, to: bitmap)
+                        try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory + "/\(mode)-\(23 + index)-overlay-\(selection.rawValue).png"))
+                        continue
+                    }
                     let content = try await SCShareableContent.currentProcess
                     guard let own = content.windows.first(where: { $0.windowID == UInt32(window.windowNumber) }) else { fputs("Overlay demo window is not on screen\n", stderr); exit(1) }
                     let config = SCStreamConfiguration(); config.width = 1520; config.height = 840; config.showsCursor = false; config.ignoreShadowsSingleWindow = true

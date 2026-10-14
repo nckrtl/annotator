@@ -151,15 +151,15 @@ pub fn resize_comment(app: AppHandle, height: f64) {
     panels::resize_comment(&app, height);
 }
 
-/// Proxies Ofide's Local API: `status`, `start`, `stop` or `cancel`. Rejects only for setup errors.
+/// Proxies Operator's Local API: `status`, `start`, `stop` or `cancel`. Rejects only for setup errors.
 pub async fn ofide(app: AppHandle, action: String) -> Result<Value, String> {
     let settings = app::settings(&app);
-    let base = settings.ofide().ok_or("The Ofide URL in Settings is not valid.")?;
-    let token = ofide::read_token(&ofide::token_file(&settings.ofide_app, &home()))?;
-    let client = ofide::OfideClient::new(base, token);
+    let base = settings.ofide().ok_or("The Operator URL in Settings is not valid.")?;
+    let token = ofide::read_token(&ofide::token_file(crate::settings::OFIDE, &home()))?;
+    let client = ofide::OperatorClient::new(base, token);
     let answer = shared(&app).ofide.run(&client, &action).await?;
     if action != "status" {
-        crate::log(&format!("Ofide {action}: {}", answer.result.name()));
+        crate::log(&format!("Operator {action}: {}", answer.result.name()));
     }
     Ok(answer.json())
 }
@@ -297,6 +297,8 @@ pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Valu
 "quit_app" => {  serde_json::to_value(quit_app(app.clone())).map_err(|e| e.to_string()) },
 "resize_menu" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_menu(app.clone(), height)).map_err(|e| e.to_string()) },
 "submit_comment" => { let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; serde_json::to_value(submit_comment(app.clone(), text)?).map_err(|e| e.to_string()) },
+"release_overlay" => { app::release_overlay(&app); Ok(Value::Null) },
+"stop_annotating" => { app::stop_annotating(&app); Ok(Value::Null) },
 "cancel_comment" => {  serde_json::to_value(cancel_comment(app.clone())).map_err(|e| e.to_string()) },
 "comment_finish_done" => { let submit: bool = serde_json::from_value(args["submit"].clone()).map_err(|e| format!("submit: {e}"))?; let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; let keep: Option<bool> = serde_json::from_value(args["keep"].clone()).map_err(|e| format!("keep: {e}"))?; serde_json::to_value(comment_finish_done(app.clone(), submit, text, keep)).map_err(|e| e.to_string()) },
 "resize_comment" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_comment(app.clone(), height)).map_err(|e| e.to_string()) },

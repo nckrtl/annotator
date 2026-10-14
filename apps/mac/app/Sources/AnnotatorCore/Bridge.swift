@@ -29,16 +29,21 @@ import Foundation
     public func request(_ command: String, _ args: JSON = .object([:])) async throws -> JSON {
         guard let input else { throw BridgeError("Annotator's core is not running.") }
         let id = UUID().uuidString
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            do {
-                var bytes = try JSONEncoder().encode(JSON.object(["id": .string(id), "command": .string(command), "args": args]))
-                bytes.append(10); try input.write(contentsOf: bytes)
-            } catch { pending.removeValue(forKey: id)?.resume(throwing: error) }
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(135))
-                self?.pending.removeValue(forKey: id)?.resume(throwing: BridgeError("The core did not answer \(command)."))
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pending[id] = continuation
+                do {
+                    var bytes = try JSONEncoder().encode(JSON.object(["id": .string(id), "command": .string(command), "args": args]))
+                    bytes.append(10); try input.write(contentsOf: bytes)
+                } catch { pending.removeValue(forKey: id)?.resume(throwing: error) }
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(135))
+                    self?.pending.removeValue(forKey: id)?.resume(throwing: BridgeError("The core did not answer \(command)."))
+                }
             }
+        } onCancel: {
+            Task { @MainActor in self.pending.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
         }
     }
     private func receive(_ value: JSON) {
@@ -53,5 +58,9 @@ import Foundation
         waiting.values.forEach { $0.resume(throwing: BridgeError(message)) }
         onEvent?("bridge-error", .string(message))
     }
-    public func stop() { try? input?.close(); input = nil; process?.terminate(); process = nil }
+    public func stop() {
+        try? input?.close(); input = nil; process?.terminate(); process = nil
+        let waiting = pending; pending.removeAll()
+        waiting.values.forEach { $0.resume(throwing: CancellationError()) }
+    }
 }

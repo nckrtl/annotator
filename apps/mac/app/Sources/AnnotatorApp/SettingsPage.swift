@@ -40,14 +40,10 @@ struct SettingsPage: View {
                         KitRow("Server log") { Button("Open") { model.act("show_server_log") }.buttonStyle(.kit) }
                     }
                 } else if section == "dictation" {
-                    KitGroup("Ofide", footer: "Ofide pastes into the focused comment field. Annotator waits for the paste before it submits.") {
-                        KitRow("Use Ofide dictation") { KitSwitch("Use Ofide", isOn: toggle("ofideEnabled")) }
-                        KitRow("Start dictation with each comment") { KitSwitch("Start dictation automatically", isOn: toggle("ofideAutoStart")) }
-                        KitRow("Application") {
-                            KitPicker(selection: text("ofideApp"), options: [("com.nckrtl.ofide", "Ofide"), ("com.nckrtl.ofide.dev", "Ofide Dev")])
-                                .onChange(of: model.settings["ofideApp"]) { _, value in model.settings["ofideURL"] = .string(value.string.hasSuffix(".dev") ? "http://127.0.0.1:12322" : "http://127.0.0.1:12321") }
-                        }
-                        KitRow("Local API URL") { KitTextField("http://127.0.0.1:12321", text: text("ofideURL")).frame(width: 250) }
+                    KitGroup("Operator", footer: "Operator pastes into the focused comment field. Annotator waits for the paste before it submits.") {
+                        KitRow("Use Operator dictation") { KitSwitch("Use Operator", isOn: toggle("operatorEnabled")) }
+                        KitRow("Start dictation with each comment") { KitSwitch("Start dictation automatically", isOn: toggle("operatorAutoStart")) }
+
                     }
                 } else {
                     KitGroup("Conn sessions", footer: "Create a session for each project. Automatic nudges send new annotations to the existing session only when enabled.") {

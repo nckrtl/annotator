@@ -119,6 +119,8 @@ for line in sys.stdin:
             assert call('get_projects')['routes']['projects'] == [project, other]
             call('toggle_annotating')
             wait_for(lambda: any(e.get('event') == 'comment-opened' for e in events) or (call('get_state') and False))
+            assert not call('get_state')['annotating'], 'Selection must release the screen'
+            assert call('get_state')['commentOpen'], 'Selection must preserve the draft'
             call('submit_comment', text='Native bridge smoke test')
             items = wait_for(lambda: call('get_queue'))
             first = items[0]
@@ -130,7 +132,7 @@ for line in sys.stdin:
             assert call('get_screenshot', id=first['id']).startswith('data:image/png;')
             assert any(e.get('event') == 'queue' for e in events)
             server.terminate(); server.wait(timeout=5)
-            call('helper', command={'action': 'selectAt', 'x': 20, 'y': 20})
+            call('toggle_annotating')
             time.sleep(0.1)
             call('submit_comment', text='Saved while offline')
             wait_for(lambda: call('get_state')['pending']['count'] == 1)
@@ -151,6 +153,11 @@ for line in sys.stdin:
                 raise AssertionError('Unknown command accepted')
             except RuntimeError as error:
                 assert 'Unknown command' in str(error)
+            call('toggle_annotating')
+            time.sleep(0.2)
+            call('cancel_comment')
+            assert not call('get_state')['annotating'], 'Escape must not resume the overlay'
+            assert not call('get_state')['commentOpen'], 'Escape must close the draft'
             process.stdin.close()
             assert process.wait(timeout=5) == 0
             print('Core smoke passed: settings, permissions, hotkeys, project CRUD and priority, routing, capture-to-submit, screenshot, live queue, offline retry, delete, invalid commands, EOF shutdown.')

@@ -26,6 +26,7 @@ import AnnotatorCore
     var dictation: String { demoDictation ?? voice.phase }
     var commentError: String?
     var commentBusy = false
+    var isAnnotating: Bool { state["annotating"].bool || state["commentOpen"].bool }
     #if DEBUG
     var demo = ProcessInfo.processInfo.environment["ANNOTATOR_UI_DEMO"] == "1"
     #else
@@ -48,9 +49,13 @@ import AnnotatorCore
         panels = Panels(model: self); hotkeys = Hotkeys(model: self)
         voice.call = { [weak self] action in guard let self else { throw CancellationError() }; return try await self.call("ofide", ["action": .string(action)]) }
         voice.text = { [weak self] in self?.comment ?? "" }
-        voice.focus = { [weak self] in self?.panels?.focusComment() }
+        voice.focus = { [weak self] in
+            guard let panels = self?.panels else { throw CancellationError() }
+            try await panels.prepareDictation()
+        }
+        voice.releaseOverlay = { [weak self] _ in self?.releaseOverlay() }
         voice.requestClose = { [weak self] in self?.cancelComment() }
-        voice.reportError = { [weak self] in self?.error = $0 }
+        voice.reportError = { [weak self] in self?.commentError = $0 }
         if demo { Demo.populate(self); return }
         bridge.onEvent = { [weak self] event, value in self?.event(event, value) }
         do {
@@ -96,12 +101,15 @@ import AnnotatorCore
         case "navigate": navigate(value["page"].string, id: value["id"] == .null ? nil : value["id"].string)
         case "onboarding": panels?.permissions()
         case "alert": error = value["title"].string + ": " + value["message"].string
-        case "bridge-error": error = value.string
+        case "bridge-error":
+            voice.cancel(); panels?.hideComment(); hotkeys?.unregister(2); bridge.stop()
+            DictationLog.write("overlay-release core-stopped")
+            error = value.string
         case "hide-menu": panels?.menu?.orderOut(nil)
         case "comment-opened": voice.cancel(); target = value; comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
         case "show-comment": panels?.showComment(value)
         case "hide-comment": panels?.hideComment()
-        case "comment-cancel": cancelDictation()
+        case "comment-cancel": cancelDictation(); panels?.hideComment()
         case "comment-finish": Task { await submit(moving: true) }
         case "register-hotkey": hotkeys?.register(value)
         case "unregister-hotkey": hotkeys?.unregister(value.int)
@@ -114,7 +122,11 @@ import AnnotatorCore
         }
     }
     func cancelDictation() { voice.cancel() }
-    func cancelComment() { cancelDictation(); act("cancel_comment") }
+    func releaseOverlay() { act("release_overlay") }
+    func cancelComment() {
+        cancelDictation(); panels?.hideComment(); hotkeys?.unregister(2); commentBusy = false
+        act("stop_annotating")
+    }
     func startDictation() { voice.start() }
     func finishDictation() async throws { try await voice.finish() }
     func submit(moving: Bool = false) async {
@@ -124,7 +136,7 @@ import AnnotatorCore
             if moving { _ = try await call("comment_finish_done", ["submit": .bool(!comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), "text": .string(comment), "keep": .bool(false)]) }
             else { _ = try await call("submit_comment", ["text": .string(comment)]) }
         } catch is CancellationError {
-            return
+            releaseOverlay(); return
         } catch {
             commentError = error.localizedDescription
             if moving { act("comment_finish_done", ["submit": .bool(false), "text": .string(comment), "keep": .bool(true)]) }
