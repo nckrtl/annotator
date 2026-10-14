@@ -20,7 +20,10 @@ helper. Read this file before you change it.
   and the release rules.
 - The web package lives in `packages/annotator`. Do not change it from here.
   This app only talks to its server over HTTP.
-- The current app includes project routing and Conn sessions. Preserve them.
+- The current app includes project routing. It does not start or configure
+  agent sessions. "Copy prompt" is the only handoff: the user pastes it into
+  any agent, which claims and completes annotations over the server's HTTP API.
+  A project's instructions are appended to its prompt.
 - The UI conversion is authorized. No webview is needed in the Mac app.
 
 ## Users and principles
@@ -86,7 +89,7 @@ helper. Read this file before you change it.
    server's error in the panel. Keep a local copy until the POST succeeds, so a
    down server does not lose the comment.
 8. **Queue.** The menu bar menu shows open, in-progress and done counts, the
-   latest items with their number and comment, and a link to open the server
+   latest items with their app and comment, and a link to open the server
    URL. Subscribe to `GET <base>/events` (server-sent events) for live
    updates; fall back to polling `GET <base>` every 3s if the stream drops,
    and show "server unreachable" after three failed polls.
@@ -221,7 +224,7 @@ use another checkout. Do not copy its controls into this repository.
 - Settings and Projects: pages in the shell, not separate windows. Settings
   uses `KitGroup` and `KitRow`. The project editor is a `KitSheet`.
 - Menu: SwiftUI `MenuBarExtra` with window style. Library, Projects and Settings
-  provide the full queue, server and agent controls.
+  provide the full queue, server and prompt controls.
 - Comment: SwiftUI hosted in an activating, key-capable AppKit `NSPanel` and visible over full-screen apps. `NSTextView` preserves input methods,
   Operator paste, Return to submit, Shift-Return for a line, and Escape to cancel.
 - Permissions: a frosted SwiftUI prompt in an AppKit window.
@@ -240,13 +243,13 @@ use another checkout. Do not copy its controls into this repository.
 app/                  # SwiftPM: AnnotatorApp (SwiftUI/AppKit), AnnotatorCore (Foundation)
 src-tauri/            # historical directory name; now a plain Rust executable, no Tauri
 native/               # Swift capture helper and its UI-free record/geometry target
-scripts/              # build, sign, install, test, UI snapshots, Conn server
+scripts/              # build, sign, install, test, UI snapshots
 Snapshots/designkit/  # generated light/dark UI captures (ignored by git)
 docs/port.md          # process contracts
 ```
 
 Rust keeps settings, HTTP, SSE/polling, queue, pending/retry storage, routing,
-Conn, Keychain and Operator serialization. It imports neither SwiftUI nor AppKit.
+agent prompts and Operator serialization. It imports neither SwiftUI nor AppKit.
 `AnnotatorCore` keeps JSON framing, the pipe client and dictation lifecycle;
 it imports neither SwiftUI nor AppKit. Only the UI target owns windows, Carbon
 shortcuts, focus and file pickers.
@@ -263,7 +266,7 @@ processes from hit testing and capture. Closing the host's pipe stops the core
 and its helper. A core failure is visible and fails all outstanding requests.
 
 Bundle id stays `com.nckrtl.annotator`; `LSUIElement` remains true. Settings,
-project routes, pending comments and tokens keep their existing locations.
+project routes and pending comments keep their existing locations.
 
 ## Build and install
 
@@ -293,7 +296,7 @@ read-only repository secret), and sets `DESIGN_KIT_PATH` to that checkout.
 ## Verification
 
 - `scripts/test.sh`: capture geometry and redaction; Rust HTTP/queue/retry,
-  routing, Conn and Operator; Swift pipe framing and dictation races.
+  routing, prompts and Operator; Swift pipe framing and dictation races.
 - `scripts/smoke-core.py`: real Rust core, temporary home and loopback server,
   controlled helper fixture. Tests saved settings, permission and hotkey events,
   capture-to-submit, routing, screenshots, live queue, offline retry, deletion,
@@ -322,10 +325,11 @@ Possible follow-ups (project routing is already implemented):
   window they belong to (store window id and the position relative to the
   window). Hide them when that window is not on screen; hide them when
   content moves.
-- Project routing: rules in `~/.config/annotator/routes.json` map bundle id,
-  window title pattern or URL prefix to a project name and root folder. Set
-  `native.project` on each record. Unmatched records go to an inbox project.
-  Agents filter on it.
+- Project routing: rules in `~/.config/annotator/routes.json` map an app's
+  bundle id (set with "Use last annotated app") and a URL prefix to a project
+  name and root folder. When both are set, both must match; the first matching
+  project wins. Set `native.project` on each record. Unmatched records go to
+  the Inbox. Agents filter on it.
 - Full-window screenshot next to the element crop.
 
 ## Prior art to read

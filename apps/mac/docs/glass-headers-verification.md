@@ -37,7 +37,7 @@ the header rule.
 | Settings: General | General / Dictation / Conn picker; Save / Saved | Bordered `KitPicker`; ink primary button | One glass picker/Save group | `SettingsPage.swift`; 06, 19, 21 |
 | Settings: Dictation | Same picker and Save | Same non-glass controls | Same glass group | `SettingsPage.swift`; 07, 21b, 41 |
 | Settings: Conn | Same picker and Save | Same non-glass controls | Same glass group; effort picker stays in form | `SettingsPage.swift`; 08, 22, 42 |
-| Menu-bar panel: populated, empty, offline, overflow | Settings | Plain icon button | Glass Settings control | `Panels.swift`; 11, 26; `menu-check/` |
+| Menu-bar panel: populated, empty, offline, overflow | More actions (⋯) | Plain icon button | Glass ⋯ menu (was Settings) | `Panels.swift`; 11, 26; `menu-check/` |
 | Comment panel: normal, recording, capture error, missing paste | Cancel comment (×) | Plain icon button | Glass close control; Escape retained | `Panels.swift`; 14, 15, 16, 16b |
 | Permissions: denied / granted | App mark, title and hint; native window close | No app-owned header controls | Unchanged; Allow is in rows, Check again/Done/Relaunch in footer | `Panels.swift`; 12, 13; `menu-check/` real permission window |
 | Offline / empty annotation collection | Same list toolbar | Glass | Glass retained; sidebar fixed | `MainWindow.swift`; 05, 17 |
@@ -48,9 +48,10 @@ the header rule.
 | Desktop selection overlay | Target label; no header controls | No header controls | Unchanged | Native helper; 23, 24, 25 |
 | System menu bar / app commands | App menus; pencil status item and queue count | Native | Unchanged | `AnnotatorApp.swift`; `menu-check/` status-item captures |
 
-The menu's Annotate screen button is below its identity/header row, in the
-content. Projects and More actions are in its footer. The comment microphone and
-Submit are also footer actions. These retain their existing styles and behavior.
+Update 2026-10-14: the menu now follows Operator's panel. Its header holds the
+title and one glass ⋯ menu (Open Annotator, Settings…, server, permissions, agent
+prompt, Quit). It has no Annotate screen button, footer or Projects button. The
+comment microphone and Submit are footer actions. These retain their existing styles and behavior.
 
 ## DesignKit API and behavior
 

@@ -69,9 +69,11 @@ icon package bundle. Logs: `build/remove-phosphor/`.
 
 Projects is a regular sidebar item. Its A–Z list shares annotation entry rows and
 Vault's 220 pt sidebar, 300 pt list, detail header, and empty state. Use + to add a
-project, Edit to rename it or change its folder, routing rules, notes, model, or
-runtime mode. The detail menu keeps agent prompts, Conn sessions, routing priority,
-and deletion. The list menu keeps the all-annotations and inbox prompts.
+project, Edit to change its name, folder, instructions, app or URL prefix. The
+instructions are appended to the project's agent prompt. The detail menu keeps the
+agent prompt, routing priority and deletion. The list menu keeps the all-annotations
+and inbox prompts. Annotator starts no agent sessions; paste a copied prompt into any
+agent.
 
 View annotations opens that project's filtered list. Its back button returns to
 the selected project. ⌘F searches the current collection; arrow keys select rows.

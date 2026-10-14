@@ -5,12 +5,10 @@ import AnnotatorCore
 
 struct SettingsPage: View {
     @Bindable var model: AppModel
-    @State private var token = ""
     @State private var saved = false
     @State private var recording = false
     @State private var monitor: Any?
     @State private var section = "general"
-    @State private var connectionSaved = false
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
@@ -39,36 +37,17 @@ struct SettingsPage: View {
                         KitRow("Refused comments") { Button("Show \(model.state["failedCount"].int) files") { model.act("show_failed") }.buttonStyle(.kit) }
                         KitRow("Server log") { Button("Open") { model.act("show_server_log") }.buttonStyle(.kit) }
                     }
-                } else if section == "dictation" {
+                } else {
                     KitGroup("Operator", footer: "Operator pastes into the focused comment field. Annotator waits for the paste before it submits.") {
                         KitRow("Use Operator dictation") { KitSwitch("Use Operator", isOn: toggle("operatorEnabled")) }
                         KitRow("Start dictation with each comment") { KitSwitch("Start dictation automatically", isOn: toggle("operatorAutoStart")) }
-
-                    }
-                } else {
-                    KitGroup("Conn sessions", footer: "Create a session for each project. Automatic nudges send new annotations to the existing session only when enabled.") {
-                        KitRow("Enable Conn") { KitSwitch("Enable Conn", isOn: toggle("t3Enabled")) }
-                        KitRow("Nudge sessions automatically") { KitSwitch("Automatic nudges", isOn: toggle("t3Nudge")) }
-                        KitRow("Server endpoint") { KitTextField("http://127.0.0.1:3780", text: text("t3Endpoint")).frame(width: 270) }
-                        KitRow("Connection token") { KitTextField("Leave blank to keep saved token", text: $token, secure: true).frame(width: 270) }
-                        KitRow("Save connection", detail: "The token is stored in Keychain.") { Button(connectionSaved ? "Saved" : "Save token") { Task {
-                            do { _ = try await model.call("conn_save_connection", ["endpoint": model.settings["t3Endpoint"], "token": .string(token)]); token = ""; connectionSaved = true; try? await Task.sleep(for: .seconds(1.6)); connectionSaved = false }
-                            catch { model.error = error.localizedDescription }
-                        } }.buttonStyle(.kit) }
-                        KitRow("Pair a Conn window") { Button("Copy pairing URL") { model.act("conn_pairing_url") }.buttonStyle(.kit) }
-                    }
-                    KitGroup("Session defaults") {
-                        KitRow("Model") { KitTextField("provider/model", text: text("t3DefaultModel")).frame(width: 290) }
-                        KitRow("Reasoning effort") { KitPicker(selection: text("t3Effort"), options: ["low", "medium", "high", "xhigh", "max"].map { ($0, $0.capitalized) }) }
-                        KitRow("Server data folder") { KitTextField("~/.t3/headless", text: text("t3Home")).frame(width: 290) }
-                        KitRow("Window data folder") { KitTextField("~/.t3/desktop-dev", text: text("t3WindowHome")).frame(width: 290) }
                     }
                 }
             }.frame(maxWidth: Kit.readableWidth).padding(Kit.columnMargin).padding(.bottom, 28).frame(maxWidth: .infinity)
         }.kitBottomFade().kitTopBar {
             PageBar(title: "Settings") {
                 KitToolbarGroup {
-                    KitToolbarPicker(selection: $section, options: [("general", "General"), ("dictation", "Dictation"), ("conn", "Conn")])
+                    KitToolbarPicker(selection: $section, options: [("general", "General"), ("dictation", "Dictation")])
                     KitToolbarButton(saved ? "Saved" : "Save") { Task { await model.saveSettings(); saved = model.error == nil; try? await Task.sleep(for: .seconds(1.6)); saved = false } }
                 }
             }

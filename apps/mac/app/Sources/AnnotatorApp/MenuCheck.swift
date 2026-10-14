@@ -29,7 +29,7 @@ import ScreenCaptureKit
                 precondition(window.frame.width == 360 && window.frame.height > 200 && window.frame.height <= 620, "Menu must have a usable intrinsic size")
                 print("PASS \(appearance) intrinsic menu: \(window.frame.size)")
                 await shot(window, name: "\(appearance)-menu", directory: directory)
-                for (label, page) in [("Settings", "settings"), ("Projects", "projects"), ("Open library", "all")] {
+                for (label, page) in [("Settings…", "settings"), ("Open Annotator", "all")] {
                     model.window?.close()
                     window.makeKeyAndOrderFront(nil)
                     model.navigate(page)

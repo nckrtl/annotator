@@ -148,37 +148,142 @@ struct PermissionsView: View {
         }
     }
 }
+/// The menu-bar flyout, laid out like Operator's panel (`MenuBarPanelView`): a header bar with the
+/// title and one ⋯ menu, then notices and the recent annotations as plain hover rows.
 struct MenuPanel: View {
     @Bindable var model: AppModel
-    @State private var contentHeight: CGFloat = 560
+    @State private var contentHeight: CGFloat = 480
+    private var pending: Int { model.state["pending"]["count"].int }
+    private var failed: Int { model.state["failedCount"].int }
+    /// Pending and refused comments have their own notices; any other unhealthy state shows here.
+    private var healthNotice: Bool {
+        let tone = model.state["health"]["tone"].string
+        return tone == "error" || (tone == "warning" && pending == 0 && failed == 0)
+    }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitToolbarGroup { KitToolbarButton(icon: .settings, help: "Settings") { model.navigate("settings") }.accessibilityLabel("Settings") } }
-                Button { model.act("toggle_annotating") } label: { HStack { Text(model.isAnnotating ? "Stop annotating" : "Annotate screen"); Spacer(); KitKeyCap(model.state["hotkey"]["display"].string) } }.buttonStyle(.kitPrimary)
-                if model.state["health"]["tone"].string == "error" { KitGroup { KitNotice(model.state["health"]["title"].string, tone: .error) } }
-                KitGroup("Recent annotations") {
-                    if model.items.isEmpty { KitRow("No annotations yet") { EmptyView() } }
-                    ForEach(Array(model.items.sorted { $0["number"].int > $1["number"].int }.prefix(5)), id: \.self) { item in
-                        Button { model.navigate("all", id: item["id"].string) } label: { AnnotationRow(item: item).padding(12) }.buttonStyle(.plain)
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
+                    if pending > 0 {
+                        KitGroup { KitNotice("\(pending) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }.padding(.bottom, Kit.Space.m)
                     }
-                    KitActionRow("Open library", icon: .allItems) { model.navigate("all") }
+                    if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
+                    if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
+                    ForEach(Array(model.items.sorted { $0["number"].int > $1["number"].int }.prefix(5)), id: \.self) { item in
+                        MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
+                    }
                 }
-                if model.state["pending"]["count"].int > 0 {
-                    KitGroup { KitNotice("\(model.state["pending"]["count"].int) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }
-                }
-                if model.state["failedCount"].int > 0 { Button("Show \(model.state["failedCount"].int) refused comments") { model.act("show_failed") }.buttonStyle(.kit) }
-                HStack {
-                    Button("Projects") { model.navigate("projects") }.buttonStyle(.kitSecondary)
-                    Spacer()
-                    Menu { Button("Open server") { model.act("open_server") }; Button("Permissions…") { model.panels?.permissions() }; Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string("all")]) }; Divider(); Button("Quit Annotator") { NSApp.terminate(nil) } } label: { KitIconImage(.more, size: 14).foregroundStyle(.secondary).frame(width: 30, height: 28).contentShape(Rectangle()) }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).accessibilityLabel("More actions")
-                }
-            }.padding(16)
+                .padding(.horizontal, Kit.columnMargin).padding(.bottom, Kit.columnMargin)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }.scrollIndicators(.never)
         }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
-        .frame(width: 360, height: min(contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
+        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
+    }
+    /// As in Operator: the title starts where row text starts, and one ⋯ menu holds the app's actions.
+    private var header: some View {
+        HStack(spacing: Kit.Space.m) {
+            Text("Annotations").font(.kitTitle).padding(.leading, Kit.rowInset)
+                .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
+            KitToolbarGroup {
+                KitToolbarMenu(help: "More") {
+                    Button("Open Annotator") { model.navigate("all") }
+                    Button("Settings…") { model.navigate("settings") }.keyboardShortcut(",", modifiers: .command)
+                    Divider()
+                    Button("Open server") { model.act("open_server") }
+                    Button("Permissions…") { model.panels?.permissions() }
+                    Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string("all")]) }
+                    Divider()
+                    Button("Quit Annotator") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
+                }
+            }.accessibilityLabel("More actions")
+        }
+        .padding(.horizontal, Kit.columnMargin)
+        .frame(height: Kit.containerBarHeight)
+    }
+}
+
+/// One recent annotation, styled like Operator's transcript row: the source app's icon, the
+/// comment, a detail line, and the status icon at the end. The whole row opens the annotation.
+private struct MenuAnnotationRow: View {
+    let item: JSON
+    let action: () -> Void
+    @State private var hovering = false
+    private var status: (icon: KitIcon, label: String) {
+        if item["question"].bool { return (.warning, "Question") }
+        switch item["status"].string {
+        case "done": return (.done, "Done")
+        case "todo": return (.clock, "To do")
+        default: return (.sync, "In progress")
+        }
+    }
+    private var details: String {
+        let app = item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string
+        return [app, item["native"]["project"].string].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 10) {
+                MenuAppIcon(bundleId: item["native"]["app"]["bundleId"].string)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item["comment"].string).font(.kitBody).foregroundStyle(.primary).lineLimit(2)
+                        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                    if !details.isEmpty { Text(details).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                KitIconImage(status.icon, size: 12).foregroundStyle(.secondary).padding(.top, 3).help(status.label)
+            }
+            .padding(Kit.rowInset)
+            .background(hovering ? Color.kitHover : .clear, in: RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("\(item["comment"].string), \(status.label)")
+    }
+}
+
+/// The installed app's icon at 26 pt, as in Operator's `AppIconTile`, or a quiet tile when unknown.
+private struct MenuAppIcon: View {
+    let bundleId: String
+    @MainActor private static var cache: [String: NSImage] = [:]
+    private var image: NSImage? {
+        if let image = Self.cache[bundleId] { return image }
+        guard !bundleId.isEmpty, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return nil }
+        let image = NSWorkspace.shared.icon(forFile: url.path)
+        Self.cache[bundleId] = image
+        return image
+    }
+    var body: some View {
+        Group {
+            if let image {
+                // macOS icons carry a margin around their shape; fill the tile with the shape.
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit().scaleEffect(1.18)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 26 * 0.24, style: .continuous).fill(Color.kitTile)
+                    KitIconImage(.allItems, size: 13).foregroundStyle(.secondary)
+                }
+            }
+        }.frame(width: 26, height: 26).accessibilityHidden(true)
+    }
+}
+
+/// No annotations yet: how to start, with the shortcut as a key cap (Operator's `TranscriptsEmpty`).
+private struct MenuEmpty: View {
+    let hotkey: String
+    var body: some View {
+        VStack(spacing: Kit.Space.xs) {
+            KitIconImage(.allItems, size: 22).foregroundStyle(.tertiary).padding(.bottom, Kit.Space.m)
+            Text("No annotations yet").font(.kitLabel).foregroundStyle(.secondary)
+            if !hotkey.isEmpty {
+                HStack(spacing: Kit.Space.xs) { Text("Press"); KitKeyCap(hotkey); Text("to annotate the screen.") }
+            }
+        }
+        .font(.kitDetail).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity).padding(.vertical, 40)
     }
 }

@@ -9,7 +9,7 @@ struct ProjectsPage: View {
     @State private var deleting: JSON?
     private var projects: [JSON] {
         model.projects.filter { project in
-            model.search.isEmpty || ["name", "root", "notes"].map { project[$0].string }
+            model.search.isEmpty || ["name", "root", "instructions"].map { project[$0].string }
                 .joined(separator: " ").localizedCaseInsensitiveContains(model.search)
         }.sorted { $0["name"].string.localizedStandardCompare($1["name"].string) == .orderedAscending }
     }
@@ -120,17 +120,12 @@ private struct ProjectDetail: View {
                 KitGroup("Project") {
                     KitFieldRow("Name", value: project["name"].string, lines: 4)
                     KitFieldRow("Folder", value: project["root"].string.isEmpty ? "Not set" : project["root"].string, lines: 4)
+                    KitFieldRow("Instructions", value: project["instructions"].string.isEmpty ? "None" : project["instructions"].string, lines: 30)
                 }
-                KitGroup("Routing rules", footer: "Every filled rule group must match. The first matching project wins. Unmatched annotations stay in the inbox.") {
-                    KitFieldRow("Bundle IDs", value: rules("bundleIds"), lines: 20)
-                    KitFieldRow("Window titles", value: rules("titleContains"), lines: 20)
-                    KitFieldRow("URL prefixes", value: rules("urlPrefixes"), lines: 20)
+                KitGroup("Routing", footer: "Annotations from the chosen app or under the URL prefix go here. When both are set, both must match. The first matching project wins; the rest go to the Inbox.") {
+                    KitFieldRow("App", value: rules("bundleIds"), lines: 4)
+                    KitFieldRow("URL prefix", value: rules("urlPrefixes"), lines: 4)
                     KitFieldRow("Priority", value: "\(position + 1) of \(model.projects.count)", copyable: false)
-                }
-                KitGroup("Agent") {
-                    KitFieldRow("Notes", value: project["notes"].string.isEmpty ? "None" : project["notes"].string, lines: 30)
-                    KitFieldRow("Model", value: project["t3Model"].string.isEmpty ? "Default model" : project["t3Model"].string, lines: 4)
-                    KitFieldRow("Runtime mode", value: project["t3RuntimeMode"].string == "full-access" ? "Full access" : "Approval required", lines: 2)
                 }
             }.frame(maxWidth: 600, alignment: .leading).padding(Kit.columnMargin).padding(.bottom, 28).frame(maxWidth: .infinity, alignment: .leading)
         }.kitBottomFade().kitTopBar {
@@ -142,8 +137,6 @@ private struct ProjectDetail: View {
                     KitToolbarButton("Edit", action: edit)
                     KitToolbarMenu {
                         Button("Copy agent prompt") { model.act("copy_prompt", ["scope": project["id"]]) }
-                        Button("Start Conn session") { model.act("conn_start", ["projectId": project["id"]]) }
-                        Button("Open Conn session") { model.act("conn_open", ["projectId": project["id"]]) }
                         Divider()
                         Button("Route earlier") { reorder(-1) }.disabled(position == 0)
                         Button("Route later") { reorder(1) }.disabled(position == model.projects.count - 1)
@@ -162,7 +155,7 @@ private struct ProjectDetail: View {
     }
 }
 
-func newProject() -> JSON { .object(["id": .string(UUID().uuidString.lowercased()), "name": .string(""), "root": .string(""), "bundleIds": .array([]), "titleContains": .array([]), "urlPrefixes": .array([]), "notes": .string(""), "t3Model": .string(""), "t3RuntimeMode": .string("approval-required")]) }
+func newProject() -> JSON { .object(["id": .string(UUID().uuidString.lowercased()), "name": .string(""), "root": .string(""), "bundleIds": .array([]), "urlPrefixes": .array([]), "instructions": .string("")]) }
 @MainActor func saveProjects(_ model: AppModel, _ projects: [JSON]) async throws {
     guard !model.projectsSaving else { throw BridgeError("Projects are still saving. Try again.") }
     model.projectsSaving = true; defer { model.projectsSaving = false }
@@ -187,21 +180,22 @@ struct ProjectEditor: View {
                         KitInputRow("Folder", text: text("root"), prompt: "Choose the project folder") {
                             KitIconButton(.folder, help: "Choose folder") { let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false; if panel.runModal() == .OK { draft["root"] = .string(panel.url?.path ?? "") } }
                         }
+                        KitInputRow("Instructions", text: text("instructions"), prompt: "Added to the agent prompt", lines: 3...8)
                     }
-                    KitGroup("Routing rules", footer: "One value per line. Window titles ignore case. Bundle IDs and URL prefixes match exactly. Empty groups are ignored.") {
-                        KitInputRow("Bundle IDs", text: array("bundleIds"), prompt: "com.apple.Safari", lines: 1...3)
-                        KitInputRow("Window titles", text: array("titleContains"), prompt: "Part of a title", lines: 1...3)
-                        KitInputRow("URL prefixes", text: array("urlPrefixes"), prompt: "https://example.com", lines: 1...3)
+                    KitGroup("Routing", footer: "Annotations from the chosen app or under the URL prefix go here. When both are set, both must match. The first matching project wins; the rest go to the Inbox.") {
+                        if !draft["bundleIds"].array.isEmpty {
+                            KitLabeledRow("App") {
+                                Text(draft["bundleIds"].array.map(\.string).joined(separator: "\n")).font(.kitBody).textSelection(.enabled)
+                                Spacer(minLength: 8)
+                                KitIconButton(.clear, help: "Remove app") { draft["bundleIds"] = .array([]) }
+                            }
+                        }
                         KitActionRow("Use last annotated app", icon: .desktop) { Task { do {
                             let last = try await model.call("last_target_app")
-                            guard last != .null else { throw BridgeError("Annotate an app first.") }
-                            if !last["bundleId"].string.isEmpty { draft["bundleIds"] = .array([last["bundleId"]]) }
+                            guard last != .null, !last["bundleId"].string.isEmpty else { throw BridgeError("Annotate an app first.") }
+                            draft["bundleIds"] = .array([last["bundleId"]])
                         } catch { self.error = error.localizedDescription } } }
-                    }
-                    KitGroup("Agent") {
-                        KitInputRow("Notes", text: text("notes"), prompt: "Instructions for this project", lines: 2...5)
-                        KitInputRow("Model", text: text("t3Model"), prompt: "Use the default model")
-                        KitLabeledRow("Runtime mode") { KitPicker(selection: text("t3RuntimeMode"), options: [("full-access", "Full access"), ("approval-required", "Approval required")]) }
+                        KitInputRow("URL prefix", text: urlPrefix, prompt: "https://example.com")
                     }
                 }
         } actions: {
@@ -222,6 +216,7 @@ struct ProjectEditor: View {
         } message: { Text(error ?? "") }
     }
     private func text(_ key: String) -> Binding<String> { Binding(get: { draft[key].string }, set: { draft[key] = .string($0) }) }
-    private func array(_ key: String) -> Binding<String> { Binding(get: { draft[key].array.map(\.string).joined(separator: "\n") }, set: { draft[key] = .array($0.split(separator: "\n").map { .string($0.trimmingCharacters(in: .whitespaces)) }.filter { !$0.string.isEmpty }) }) }
+    /// One prefix; an empty field removes it.
+    private var urlPrefix: Binding<String> { Binding(get: { draft["urlPrefixes"].array.first?.string ?? "" }, set: { let value = $0.trimmingCharacters(in: .whitespaces); draft["urlPrefixes"] = .array(value.isEmpty ? [] : [.string(value)]) }) }
 }
 extension Notification.Name { static let demoProjectEditor = Notification.Name("demo-project-editor") }

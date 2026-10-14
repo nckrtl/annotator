@@ -7,7 +7,7 @@ use reqwest::Client;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-/// Annotation and Conn calls.
+/// Annotation calls.
 pub fn short() -> Client {
     static CLIENT: LazyLock<Client> = LazyLock::new(|| pinned(Client::builder().timeout(Duration::from_secs(15))));
     CLIENT.clone()

@@ -35,7 +35,7 @@ def main():
         settings_dir = temp / 'Library/Application Support/com.nckrtl.annotator'
         settings_dir.mkdir(parents=True)
         (settings_dir / 'settings.json').write_text(json.dumps({
-            'serverURL': base, 'serverAutoStart': False, 't3Enabled': False,
+            'serverURL': base, 'serverAutoStart': False, 't3Enabled': False, 't3Nudge': True,
             'ofideEnabled': False, 'ofideAutoStart': False,
         }))
         helper = temp / 'helper.py'
@@ -103,15 +103,17 @@ for line in sys.stdin:
             wait_for(lambda: call('get_state')['permissions']['accessibility'])
             assert any(e.get('event') == 'register-hotkey' for e in events)
             settings = call('get_settings')
-            settings['t3Effort'] = 'high'
-            assert call('save_settings', settings=settings)['t3Effort'] == 'high'
-            assert json.loads((settings_dir / 'settings.json').read_text())['t3Effort'] == 'high'
+            assert not any(key.startswith('t3') for key in settings), 'Old Conn keys are ignored'
+            settings['operatorAutoStart'] = True
+            assert call('save_settings', settings=settings)['operatorAutoStart'] is True
+            saved = json.loads((settings_dir / 'settings.json').read_text())
+            assert saved['operatorAutoStart'] is True and not any(key.startswith('t3') for key in saved)
             assert call('save_projects', routes={'projects': [{'id': 'fixture', 'name': 'Fixture project',
-                'root': str(temp), 'bundleIds': ['com.example.fixture']}]}) is None
+                'root': str(temp), 'bundleIds': ['com.example.fixture'], 'notes': 'Old notes'}]}) is None
             routes = call('get_projects')['routes']['projects']
             project = routes[0]
-            project.update(name='Renamed project', notes='Run checks', t3Model='test/model',
-                           t3RuntimeMode='full-access', titleContains=['Fixture'], urlPrefixes=[])
+            assert project['instructions'] == 'Old notes' and 'notes' not in project
+            project.update(name='Renamed project', instructions='Run checks', urlPrefixes=[])
             other = dict(project, id='other', name='Other project', bundleIds=['com.example.other'])
             assert call('save_projects', routes={'projects': [other, project]}) is None
             assert call('get_projects')['routes']['projects'] == [other, project]

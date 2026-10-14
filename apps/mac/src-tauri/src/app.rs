@@ -2,7 +2,6 @@
 //! emitted as the `state` event after every change.
 
 use crate::annotations::{without_screenshot, AnnotationClient, Item};
-use crate::conn::Conn;
 use crate::geometry::Rect;
 use crate::hotkey::{self, Slot};
 use crate::local_server::{self, LocalServer};
@@ -67,7 +66,6 @@ pub struct Shared {
     pub core: Mutex<Core>,
     pub queue: Arc<QueueMonitor>,
     pub submitter: Arc<Submitter>,
-    pub conn: Arc<Conn>,
     pub ofide: OperatorQueue,
     pub permission_waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Permissions>>>,
 }
@@ -124,7 +122,6 @@ pub fn setup(app: &crate::runtime::AppHandle) {
         }),
         queue,
         submitter,
-        conn: Arc::new(Conn::new(crate::conn::sessions_file())),
         ofide: OperatorQueue::default(),
         permission_waiters: Mutex::default(),
     });
@@ -139,16 +136,6 @@ pub fn setup(app: &crate::runtime::AppHandle) {
     shared(app).queue.start(client(app));
     let retry = app.clone();
     crate::runtime::spawn(async move { retry_pending(&retry).await });
-    // Retries a nudge for a session that was busy.
-    let timer = app.clone();
-    crate::runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(15)).await;
-            if let Some((open, projects)) = shared(&timer).conn.latest() {
-                nudge(&timer, open, projects);
-            }
-        }
-    });
     emit_state(app);
 }
 
@@ -182,7 +169,6 @@ pub fn app_state(app: &crate::runtime::AppHandle) -> Value {
     let connection = state.queue.connection();
     let summary = state.queue.summary();
     let counts = state.submitter.counts();
-    let conn_error = state.conn.last_error();
     let core = state.core.lock().unwrap();
     let (tone, title) = health(&connection, counts.pending, counts.failed, core.permissions.all(),
         core.hotkey_error.is_some(), core.helper_error.is_some());
@@ -210,8 +196,6 @@ pub fn app_state(app: &crate::runtime::AppHandle) -> Value {
         "queue": queue,
         "pending": {"count": counts.pending, "lastError": counts.last_retry_error},
         "failedCount": counts.failed,
-        "conn": {"enabled": core.settings.t3_enabled, "lastError": conn_error,
-            "sessions": state.conn.session_projects(projects, &core.settings)},
         "projects": projects.iter().map(|p| json!({"id": p.id, "name": p.name, "root": p.root})).collect::<Vec<_>>(),
         "projectsError": core.projects.error,
         "helperError": core.helper_error,
@@ -242,31 +226,6 @@ fn queue_changed(app: &crate::runtime::AppHandle) {
     if changed && !matches!(connection, Connection::Connecting | Connection::InvalidUrl) {
         refresh_server_status(app, false);
     }
-    if let Some(summary) = shared(app).queue.summary() {
-        let projects = with(app, |core| core.projects.routes.projects.clone());
-        shared(app).conn.remember(summary.open.clone(), projects.clone());
-        nudge(app, summary.open, projects);
-    }
-}
-
-fn nudge(app: &crate::runtime::AppHandle, open: Vec<Value>, projects: Vec<crate::projects::Project>) {
-    let app = app.clone();
-    crate::runtime::spawn(async move {
-        let conn = shared(&app).conn.clone();
-        let previous = conn.last_error();
-        let settings = settings(&app);
-        match conn.nudge(&settings, &open, &projects).await {
-            None => {}
-            Some(Ok(())) => emit_state(&app),
-            Some(Err(message)) => {
-                emit_state(&app);
-                // The timer retries every 15 s: say a repeated failure once.
-                if previous.as_deref() != Some(message.as_str()) {
-                    alert(&app, "Conn", &message);
-                }
-            }
-        }
-    });
 }
 
 pub async fn retry_pending(app: &crate::runtime::AppHandle) {
