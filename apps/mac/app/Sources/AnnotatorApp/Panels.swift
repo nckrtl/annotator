@@ -61,9 +61,11 @@ import AnnotatorCore
 
     func makeComment() -> NSPanel {
         let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 320), styleMask: [.borderless], backing: .buffered, defer: false)
+        // `isFloatingPanel` resets the level, so it comes first. The comment sits above the frozen screen.
+        panel.isFloatingPanel = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 2)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle, .canJoinAllApplications]
-        panel.isFloatingPanel = true; panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.hidesOnDeactivate = false; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.contentView = NSHostingView(rootView: CommentView(model: model).kitAppearance())
         commentPanel = panel; return panel
     }
