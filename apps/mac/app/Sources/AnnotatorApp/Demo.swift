@@ -56,6 +56,9 @@ import ScreenCaptureKit
             window.appearance = NSApp.appearance
             populate(model); model.page = "all"
             await shot(window, "\(appearance)-01-library", directory)
+            model.marked = ["demo-215", "demo-214", "demo-213"]
+            await shot(window, "\(appearance)-01b-multi-select", directory)
+            model.marked = []
             model.page = "open"
             await shot(window, "\(appearance)-35-open", directory)
             model.page = "all"
