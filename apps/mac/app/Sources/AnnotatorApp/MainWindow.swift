@@ -32,8 +32,10 @@ struct MainWindow: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Spacer()
-                KitIconButton(.sync, help: model.state["health"]["title"].string) { model.act("retry_now"); Task { await model.load() } }
-                KitIconButton(.edit, help: "Annotate screen") { model.act("toggle_annotating") }
+                KitToolbarGroup {
+                    KitToolbarButton(icon: .sync, help: model.state["health"]["title"].string) { model.act("retry_now"); Task { await model.load() } }
+                    KitToolbarButton(icon: .edit, help: "Annotate screen") { model.act("toggle_annotating") }
+                }
             }.padding(.trailing, 14).frame(height: Kit.barHeight)
             VStack(spacing: 2) {
                 KitSectionLabel("Annotations")
@@ -94,9 +96,9 @@ struct AnnotationList: View {
             .kitTopBar {
                 HStack(spacing: 8) {
                     if model.page.hasPrefix("project:") {
-                        KitIconButton(.restore, help: "Back to project") { model.navigate("projects") }
+                        KitToolbarGroup { KitToolbarButton(icon: .restore, help: "Back to project") { model.navigate("projects") } }
                     }
-                    if model.searching { KitSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
+                    if model.searching { KitHeaderSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
                     else { Text(model.pageTitle).font(.kitTitle).lineLimit(1); Spacer() }
                     KitToolbarGroup {
                         if !model.searching { KitToolbarButton(icon: .search, help: "Search annotations") { model.searching = true } }
