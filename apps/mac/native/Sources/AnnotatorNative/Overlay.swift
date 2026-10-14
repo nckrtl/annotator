@@ -24,6 +24,12 @@ final class OverlayController {
     private let devTools = DevTools()
     private var panels: [OverlayPanel] = []
     private(set) var state: State = .hovering(nil)
+    /// The screen as it was when annotate mode started. Empty until the capture is done, or when it failed.
+    private(set) var stills: [Capture.Still] = []
+    /// Open menus and flyouts as they were then. They close once the comment panel takes focus.
+    private var frozen = FrozenElements()
+    /// The frozen screen stays behind the comment panel. It takes no hover; a click on it removes it.
+    private(set) var passive = false
     var onSelect: ((Target) -> Void)?
     /// A click on the overlay while the comment panel is open: finish that comment, then move here.
     var onClickWhileFrozen: ((CGPoint) -> Void)?
@@ -60,7 +66,10 @@ final class OverlayController {
         }
     }
 
+    /// Like the system screenshot tool, the screen freezes: open menus stay visible and selectable
+    /// even after they close. Hovering stays live elsewhere.
     func show() {
+        if passive { hide(reason: "restart") }
         guard panels.isEmpty else { return }
         generation += 1
         state = .hovering(nil)
@@ -72,6 +81,22 @@ final class OverlayController {
         }
         NSCursor.crosshair.set()
         mouseMoved()
+        let session = generation
+        Task {
+            async let elements = reader.frozenElements()
+            let captured: [Capture.Still]
+            do {
+                captured = try await Capture.stills()
+            } catch {
+                captured = []
+                emit(["type": "log", "message": "The screen did not freeze: \(error)"])
+            }
+            let recorded = await elements
+            guard session == generation, isVisible else { return }
+            stills = captured
+            frozen = recorded
+            redraw()
+        }
     }
 
     func hide(reason: String = "cancel-or-release") {
@@ -81,11 +106,28 @@ final class OverlayController {
         queuedPoint = nil
         panels.forEach { $0.orderOut(nil) }
         panels = []
+        stills = []
+        frozen = FrozenElements()
+        passive = false
         NSCursor.arrow.set()
+    }
+
+    /// Annotator ended selection. With `keepBackdrop`, a frozen screen stays behind the comment.
+    func release(keepBackdrop: Bool) {
+        if keepBackdrop, passive { return }
+        hide()
+    }
+
+    /// The still of the screen that `window` covers.
+    func still(for window: NSWindow) -> CGImage? {
+        let frame = Geometry.topLeft(fromAppKit: window.frame, mainScreenHeight: NSScreen.mainHeight)
+        return stills.first { abs($0.bounds.minX - frame.minX) < 1 && abs($0.bounds.minY - frame.minY) < 1 }?.image
     }
 
     /// Back to hovering after the comment panel closes.
     func resume() {
+        passive = false
+        watchdog.activity()
         state = .hovering(nil)
         redraw()
         mouseMoved()
@@ -96,14 +138,14 @@ final class OverlayController {
     var cursor: CGPoint { Geometry.topLeft(fromAppKit: NSEvent.mouseLocation, mainScreenHeight: NSScreen.mainHeight) }
 
     func mouseMoved() {
-        if isVisible { watchdog.activity() }
+        if isVisible, !passive { watchdog.activity() }
         guard case .hovering = state else { return }
         NSCursor.crosshair.set()
         scheduleHitTest(cursor)
     }
 
     func mouseDown(option: Bool) {
-        watchdog.activity()
+        if !passive { watchdog.activity() }
         guard case .hovering = state else { return }
         if option {
             state = .dragging(start: cursor, end: cursor)
@@ -112,7 +154,7 @@ final class OverlayController {
     }
 
     func mouseDragged() {
-        watchdog.activity()
+        if !passive { watchdog.activity() }
         guard case .dragging(let start, _) = state else { return }
         state = .dragging(start: start, end: cursor)
         redraw()
@@ -133,7 +175,7 @@ final class OverlayController {
             let point = cursor
             Task { await selectElement(at: point) }
         case .frozen:
-            onClickWhileFrozen?(cursor)
+            if passive { hide(reason: "backdrop-click") } else { onClickWhileFrozen?(cursor) }
         }
     }
 
@@ -179,6 +221,7 @@ final class OverlayController {
     /// Accessibility first. `dom` asks DevTools for the real element. Hover leaves it off:
     /// a probe on every move stalls the highlight and runs script in the page.
     private func resolve(_ point: CGPoint, dom: Bool) async -> Target? {
+        if frozen.covers(point) { return frozen.target(at: point) }
         guard let target = await reader.target(at: point, text: dom) else { return nil }
         guard dom else { return target }
         let appKitPoint = Geometry.appKit(fromTopLeft: CGRect(origin: point, size: .zero), mainScreenHeight: NSScreen.mainHeight).origin
@@ -202,8 +245,15 @@ final class OverlayController {
         freeze(target)
     }
 
+    /// With a frozen screen, the overlay stays as a passive backdrop; otherwise it goes before capture.
     private func freeze(_ target: Target) {
-        hide(reason: "target-selected")
+        if stills.isEmpty {
+            hide(reason: "target-selected")
+        } else {
+            passive = true
+            watchdog.stop()
+            queuedPoint = nil
+        }
         state = .frozen(target)
         redraw()
         NSCursor.arrow.set()
@@ -284,6 +334,9 @@ final class OverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let window else { return }
+        if let still = controller.still(for: window) {
+            NSGraphicsContext.current?.cgContext.draw(still, in: bounds)
+        }
         switch controller.state {
         case .hovering(let target?), .frozen(let target):
             drawTarget(target, in: window)

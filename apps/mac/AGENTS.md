@@ -41,11 +41,13 @@ helper. Read this file before you change it.
 
 ## How it works
 
-1. **Toggle.** A global hotkey (default ⌃⌥A, configurable) or the menu bar
+1. **Toggle.** A global hotkey (default ⌥⌘A, configurable) or the menu bar
    item turns annotate mode on and off. Esc turns it off.
 2. **Overlay.** In annotate mode, one borderless transparent `NSPanel` per
    screen covers the display above everything, open menus included, like the
-   system screenshot tool. It takes mouse events, so
+   system screenshot tool. The screen freezes: the helper captures every display
+   and records the elements of open menus and flyouts, so they stay visible and
+   selectable after the comment panel takes focus and they close. It takes mouse events, so
    clicks do not reach the app underneath. It draws a highlight rectangle
    around the hovered element and a small label: app name, role and title.
 3. **Hit test.** On mouse move, find the element under the cursor:
@@ -85,8 +87,9 @@ helper. Read this file before you change it.
    margin. Exclude this app's own windows
    from the filter, so the overlay and panel are not in the image. Encode as
    JPEG (quality about 0.8) and downscale if needed to keep the request under
-   the server's 10 MiB limit. Capture right before you show the comment panel,
-   so the image shows what the user clicked on.
+   the server's 10 MiB limit. Cut the image from the frozen screen, so it shows
+   what the user saw, open menus included. Without one, capture right before you
+   show the comment panel.
 7. **Submit.** POST the record (below) to the server. Show success or the
    server's error in the panel. Keep a local copy until the POST succeeds, so a
    down server does not lose the comment.
@@ -176,7 +179,7 @@ waits for paste dispatch (200), no dictation/focus change (409), or silence (422
 milliseconds), and `error`; an HTTP 200 status can still report a worker error.
 The native contract is in `~/apps/operator/mac/app/Core/Sources/OperatorCore/Control`.
 
-The helper removes its full-screen panels at selection, before capture starts.
+At selection, the helper's full-screen panels go, or stay as a passive frozen backdrop that takes no focus and that one click removes.
 The comment uses an activating key panel. Before start and stop, verify that
 Annotator is frontmost and the editable text view is its first responder. Operator
 pins the frontmost PID at recording start. A 200 stop reply does not prove the

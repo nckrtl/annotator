@@ -54,7 +54,7 @@ Commands:
 | `permissions` | | answer `permissions` |
 | `requestScreenCapture` | | `CGRequestScreenCaptureAccess()`, then answer `permissions` |
 | `requestAccessibility` | | `AXIsProcessTrustedWithOptions(prompt: true)`, then answer `permissions` |
-| `annotate` | `on: bool` | show or hide the overlay (all screens) |
+| `annotate` | `on: bool`, `backdrop: bool` | show the overlay on all screens and freeze them, or hide it; `backdrop` keeps a frozen screen behind the comment |
 | `resume` | | the comment panel closed: unfreeze the overlay and hover again |
 | `selectAt` | `x, y` (global top-left points) | select at this point as if clicked (moving the comment) |
 
@@ -64,7 +64,7 @@ Events:
 | --- | --- | --- |
 | `online` | | ready |
 | `permissions` | `accessibility, screenRecording: bool` | |
-| `selected` | see below | the user clicked an element, a window or dragged a region; the capture is done; the overlay was removed before capture |
+| `selected` | see below | the user clicked an element, a window or dragged a region; the capture is done, cut from the frozen screen when there is one; the overlay is gone or a passive backdrop |
 | `clickWhileFrozen` | `x, y` | a click on the overlay while frozen (comment panel open) |
 | `overlay-timeout` | | the helper released its overlay after 15 s without input |
 | `escape` | | Esc while the overlay has focus (backup for the Carbon Esc hotkey) |
@@ -159,8 +159,9 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 ### Flows (port from `AppController.swift`)
 - Toggle (hotkey, menu): without both permissions open onboarding; else `annotate on`,
   register Esc; menu bar icon shows annotating.
-- `selected` → release the overlay, remember the record, keep Escape registered,
-  open the activating comment panel next to `frame`.
+- `selected` → release the overlay with `backdrop`, remember the record, keep Escape
+  registered, open the activating comment panel next to `frame`. Submit, Escape and a
+  click on the backdrop remove it.
 - Submit → fill comment and project, save to the retry store, POST, hide the panel,
   unregister Escape. Start a new selection with the hotkey or menu.
 - Escape → close the panel immediately, cancel dictation, end selection.

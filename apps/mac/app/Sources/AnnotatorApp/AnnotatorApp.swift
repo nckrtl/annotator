@@ -20,7 +20,7 @@ import DesignKit
         .commands {
             CommandGroup(replacing: .appSettings) { Button("Settings…") { model.navigate("settings") }.keyboardShortcut(",") }
             CommandGroup(after: .newItem) {
-                Button("Annotate screen") { model.act("toggle_annotating") }.keyboardShortcut("a", modifiers: [.control, .option])
+                Button("Annotate screen") { model.act("toggle_annotating") }.keyboardShortcut("a", modifiers: [.command, .option])
                 Button("Find") { if model.page == "settings" { model.navigate("all") }; model.searching = true }.keyboardShortcut("f")
             }
         }

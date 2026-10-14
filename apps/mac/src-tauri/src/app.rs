@@ -390,8 +390,9 @@ fn start_annotating(app: &crate::runtime::AppHandle) {
     emit_state(app);
 }
 
+/// Ends selection. A frozen screen stays behind the comment as a backdrop, so a closed menu still shows.
 pub fn release_overlay(app: &crate::runtime::AppHandle) {
-    let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
+    let _ = helper::send(app, &json!({"action": "annotate", "on": false, "backdrop": true}));
     let commenting = with(app, |core| { core.annotating = false; core.moving = None; core.comment.is_some() });
     if commenting { register_escape(app); } else { hotkey::unregister(app, Slot::Escape); }
     emit_state(app);
@@ -558,6 +559,8 @@ fn comment_closed(app: &crate::runtime::AppHandle) {
     if annotating {
         let _ = helper::send(app, &json!({"action": "resume"}));
         register_escape(app);
+    } else {
+        let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
     }
     emit_state(app);
 }

@@ -23,6 +23,13 @@ final class AXReader: @unchecked Sendable {
         }
     }
 
+    /// Every element in the open menus and flyouts, recorded before they close.
+    func frozenElements() async -> FrozenElements {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.readFrozenElements()) }
+        }
+    }
+
     /// The app window under `point`, for region annotations.
     func window(at point: CGPoint) async -> (AppInfo, WindowInfo)? {
         await withCheckedContinuation { continuation in
@@ -53,26 +60,78 @@ final class AXReader: @unchecked Sendable {
                 as? [[String: Any]]
         else { return nil }
         for info in list {
-            guard
-                let pid = info[kCGWindowOwnerPID as String] as? pid_t, !ourPids.contains(pid),
-                let layer = info[kCGWindowLayer as String] as? Int, (0..<20).contains(layer) || AXReader.menuLayers.contains(layer),
-                (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
-                let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
-                let bounds = CGRect(dictionaryRepresentation: boundsInfo), bounds.contains(point),
-                let number = info[kCGWindowNumber as String] as? UInt32
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                (0..<20).contains(layer) || AXReader.menuLayers.contains(layer),
+                let found = window(from: info), found.window.frame.contains(point)
             else { continue }
-            let owner = info[kCGWindowOwnerName as String] as? String
-            if owner == "Window Server" { continue }
-            let bundle = AXReader.bundle(of: pid)
-            let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-                ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
-                ?? owner ?? "Unknown"
-            let app = AppInfo(name: name, bundleId: bundle?.bundleIdentifier, pid: pid)
-            let title = info[kCGWindowName as String] as? String
-            return FoundWindow(
-                app: app, window: WindowInfo(title: title, id: number, frame: bounds), bundleURL: bundle?.bundleURL)
+            return found
         }
         return nil
+    }
+
+    /// A window of another app that shows content. Nil for ours, invisible ones and the Window Server's.
+    private func window(from info: [String: Any]) -> FoundWindow? {
+        guard
+            let pid = info[kCGWindowOwnerPID as String] as? pid_t, !ourPids.contains(pid),
+            (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+            let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
+            let bounds = CGRect(dictionaryRepresentation: boundsInfo),
+            let number = info[kCGWindowNumber as String] as? UInt32
+        else { return nil }
+        let owner = info[kCGWindowOwnerName as String] as? String
+        if owner == "Window Server" { return nil }
+        let bundle = AXReader.bundle(of: pid)
+        let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? owner ?? "Unknown"
+        let app = AppInfo(name: name, bundleId: bundle?.bundleIdentifier, pid: pid)
+        let title = info[kCGWindowName as String] as? String
+        return FoundWindow(
+            app: app, window: WindowInfo(title: title, id: number, frame: bounds), bundleURL: bundle?.bundleURL)
+    }
+
+    /// Open menus and flyouts: windows at the status and menu layers taller than a menu bar item.
+    /// For each, the outermost element that fits the window, then its elements, breadth first and bounded.
+    private func readFrozenElements() -> FrozenElements {
+        guard
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]]
+        else { return FrozenElements() }
+        let layers = [Int(CGWindowLevelForKey(.statusWindow)), Int(CGWindowLevelForKey(.popUpMenuWindow))]
+        var frozen = FrozenElements()
+        for info in list {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layers.contains(layer),
+                let found = window(from: info), found.window.frame.height > 40
+            else { continue }
+            let frame = found.window.frame
+            let appElement = AXUIElementCreateApplication(found.app.pid)
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(appElement, Float(frame.midX), Float(frame.midY), &hit) == .success,
+                var root = hit
+            else { continue }
+            let window = frame.insetBy(dx: -2, dy: -2)
+            while let parent: AXUIElement = attribute(root, kAXParentAttribute),
+                (attribute(parent, kAXRoleAttribute) as String?) != kAXApplicationRole,
+                let parentFrame = self.frame(of: parent), window.contains(parentFrame)
+            {
+                root = parent
+            }
+            frozen.windows.append(frame)
+            var queue = [root]
+            var visited = 0
+            while !queue.isEmpty, visited < 400 {
+                let element = queue.removeFirst()
+                visited += 1
+                if let elementFrame = self.frame(of: element), Geometry.isUsable(elementFrame), window.contains(elementFrame),
+                    let target = target(for: element, in: found, text: false)
+                {
+                    frozen.targets.append(target)
+                }
+                let children: [AXUIElement] = attribute(element, kAXChildrenAttribute) ?? []
+                queue.append(contentsOf: children.prefix(100))
+            }
+        }
+        return frozen
     }
 
     /// The app bundle that contains the process's executable. Read from the executable path, because
@@ -96,7 +155,7 @@ final class AXReader: @unchecked Sendable {
     // MARK: - Elements
 
     private func readTarget(at point: CGPoint, text: Bool) -> Target? {
-        guard var found = topWindow(at: point) else { return nil }
+        guard let found = topWindow(at: point) else { return nil }
         let appElement = AXUIElementCreateApplication(found.app.pid)
         enableElectronAccessibility(appElement, pid: found.app.pid, bundleURL: found.bundleURL)
 
@@ -105,6 +164,12 @@ final class AXReader: @unchecked Sendable {
 
         let fallback = Target(mode: .window, app: found.app, window: found.window, frame: found.window.frame)
         guard status == .success, let hit else { return fallback }
+        return target(for: hit, in: found, text: text) ?? fallback
+    }
+
+    /// The target for `hit`, with its path from the window down. Nil when it has no usable frame.
+    private func target(for hit: AXUIElement, in found: FoundWindow, text: Bool) -> Target? {
+        var found = found
 
         // Walk up to the window: the path runs from the window down to the element.
         var chain: [AXUIElement] = [hit]
@@ -143,7 +208,7 @@ final class AXReader: @unchecked Sendable {
 
         // Large scroll content can extend past the window; clip to what is visible.
         guard let frame = frame(of: hit)?.intersection(found.window.frame), Geometry.isUsable(frame) else {
-            return Target(mode: .window, app: found.app, window: found.window, frame: found.window.frame)
+            return nil
         }
         return Target(
             mode: .element, app: found.app, window: found.window, frame: frame,

@@ -24,8 +24,8 @@ pub struct Hotkey {
 }
 
 impl Hotkey {
-    /// ⌃⌥A. Key code 0 is kVK_ANSI_A.
-    pub const STANDARD: Hotkey = Hotkey { key_code: 0, modifiers: CONTROL | OPTION };
+    /// ⌥⌘A. Key code 0 is kVK_ANSI_A.
+    pub const STANDARD: Hotkey = Hotkey { key_code: 0, modifiers: OPTION | CMD };
 
     /// A shortcut needs at least one of ⌃, ⌥ or ⌘, or it would swallow normal typing.
     pub fn is_valid(&self) -> bool {
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn display() {
-        assert_eq!(Hotkey::STANDARD.display(), "⌃⌥A");
+        assert_eq!(Hotkey::STANDARD.display(), "⌥⌘A");
         assert_eq!(Hotkey { key_code: 1, modifiers: CMD | SHIFT }.display(), "⇧⌘S");
         assert_eq!(Hotkey { key_code: 49, modifiers: CONTROL }.display(), "⌃Space");
         assert_eq!(Hotkey { key_code: 36, modifiers: CMD | OPTION }.display(), "⌥⌘↩");
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn carbon_flags() {
-        assert_eq!(Hotkey::STANDARD.modifiers, (1 << 12) | (1 << 11));
+        assert_eq!(Hotkey::STANDARD.modifiers, (1 << 11) | (1 << 8));
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
             assert!(json.get(key).is_some(), "{key}");
         }
         assert_eq!(json.as_object().unwrap().len(), 5);
-        assert_eq!(json["hotkey"], serde_json::json!({"keyCode": 0, "modifiers": 6144}));
+        assert_eq!(json["hotkey"], serde_json::json!({"keyCode": 0, "modifiers": 2304}));
     }
 
     #[test]

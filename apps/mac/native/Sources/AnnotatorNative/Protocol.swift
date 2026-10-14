@@ -89,7 +89,7 @@ final class Helper {
             emit(Permissions.event)
         case "annotate":
             guard let on = command["on"] as? Bool else { return emitError("annotate needs a boolean \"on\".") }
-            on ? overlay.show() : overlay.hide()
+            on ? overlay.show() : overlay.release(keepBackdrop: command["backdrop"] as? Bool ?? false)
         case "resume":
             guard overlay.isVisible else { return }
             overlay.resume()
@@ -107,11 +107,13 @@ final class Helper {
     /// so the image shows what the user clicked; then send the record.
     private func select(_ target: Target) {
         let generation = overlay.generation
+        let stills = overlay.stills
         Task {
             var capture: Capture.Result?
             var captureError: String?
             do {
-                capture = try await Capture.capture(target.frame)
+                // The frozen screen is what the user saw, open menus included.
+                capture = stills.isEmpty ? try await Capture.capture(target.frame) : try Capture.crop(target.frame, from: stills)
             } catch {
                 captureError = "\(error)"
             }

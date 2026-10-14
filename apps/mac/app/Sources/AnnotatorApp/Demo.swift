@@ -21,7 +21,7 @@ import ScreenCaptureKit
     }
     static func populate(_ model: AppModel) {
         #if DEBUG
-        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"operatorEnabled":true,"operatorAutoStart":true,"hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
+        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"operatorEnabled":true,"operatorAutoStart":true,"hotkey":{"keyCode":0,"modifiers":2304}}"#.utf8))
         var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); project["id"] = .string("website"); project["instructions"] = .string("Run the local website with bun dev before checking annotations.")
         var native = newProject(); native["id"] = .string("desktop"); native["name"] = .string("Desktop app"); native["root"] = .string("~/Projects/desktop"); native["bundleIds"] = .array([.string("com.example.desktop")])
         var docs = newProject(); docs["id"] = .string("docs"); docs["name"] = .string("Documentation"); docs["urlPrefixes"] = .array([.string("https://docs.example.com")])
@@ -36,7 +36,7 @@ import ScreenCaptureKit
         model.items[1]["native"]["project"] = .string("Desktop app")
         model.items[3]["native"]["project"] = .string("Inbox")
         model.items[3]["summary"] = .string("Increased the search field width and kept the clear button visible.")
-        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌃⌥A"},"localServer":{"running":true,"busy":false}}"#.utf8))
+        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌥⌘A"},"localServer":{"running":true,"busy":false}}"#.utf8))
         model.selected = "demo-215"
         #endif
     }
