@@ -174,7 +174,7 @@ struct MenuPanel: View {
         return tone == "error" || (tone == "warning" && pending == 0 && failed == 0)
     }
     var body: some View {
-        let days = Self.days(model.items)
+        let items = model.items.sorted { $0["number"].int > $1["number"].int }
         KitScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
@@ -183,18 +183,13 @@ struct MenuPanel: View {
                 }
                 if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
                 if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
-                // As in Operator's transcript list: every annotation, newest first, under day headings.
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(days, id: \.label) { day in
-                        Text(verbatim: day.label).font(.kitSection).foregroundStyle(.secondary)
-                            .padding(.leading, Kit.rowInset)
-                            .padding(.top, day.label == days.first?.label ? 2 : Kit.Space.xxl)
-                            .padding(.bottom, Kit.Space.xs)
-                        ForEach(day.items, id: \.["id"].string) { item in
-                            MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
-                        }
+                // As in Operator's flyout: every annotation, newest first, full width, split by hairlines.
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items, id: \.["id"].string) { item in
+                        MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
+                        if item["id"] != items.last?["id"] { Rectangle().fill(Color.kitSeparator).frame(height: 0.5) }
                     }
-                }
+                }.padding(.horizontal, -Kit.columnMargin)
             }
             .padding(.horizontal, Kit.columnMargin).padding(.bottom, 28)
             // A lazy stack re-estimates its height while it scrolls. Stop at the panel's limit, so
@@ -218,31 +213,11 @@ struct MenuPanel: View {
         .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(Self.maxHeight, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
-    /// Annotations by day, newest first, labelled as Operator labels transcriptions.
-    static func days(_ items: [JSON], now: Date = Date(), calendar: Calendar = .current) -> [(label: String, items: [JSON])] {
-        var days: [(label: String, items: [JSON])] = []
-        for item in items.sorted(by: { $0["number"].int > $1["number"].int }) {
-            let label = dayLabel(item["createdAt"].double, now: now, calendar: calendar)
-            if days.last?.label == label { days[days.count - 1].items.append(item) } else { days.append((label, [item])) }
-        }
-        return days
-    }
-    private static func dayLabel(_ milliseconds: Double, now: Date, calendar: Calendar) -> String {
-        guard milliseconds > 0 else { return "Earlier" }
-        let date = Date(timeIntervalSince1970: milliseconds / 1000)
-        let diff = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
-        if diff == 0 { return "Today" }
-        if diff == 1 { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        formatter.setLocalizedDateFormatFromTemplate(diff < 7 ? "EEEE" : sameYear ? "MMMMd" : "MMMMdy")
-        return formatter.string(from: date)
-    }
     /// As in Operator: the title starts where row text starts, and one ⋯ menu holds the app's actions.
     private var header: some View {
         HStack(spacing: Kit.Space.m) {
-            Text("Annotations").font(.kitTitle).padding(.leading, Kit.rowInset)
+            Color.clear.frame(width: MenuAnnotationRow.controlWidth, height: 1)
+            Text("Annotations").font(.kitTitle)
                 .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
             KitToolbarGroup {
                 KitToolbarMenu(help: "More") {
@@ -255,7 +230,7 @@ struct MenuPanel: View {
                     Divider()
                     Button("Quit Annotator") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
                 }
-            }.accessibilityLabel("More actions")
+            }.frame(width: MenuAnnotationRow.controlWidth).accessibilityLabel("More actions")
         }
         .padding(.horizontal, Kit.columnMargin)
         .frame(height: Kit.containerBarHeight)
@@ -280,25 +255,51 @@ private struct MenuAnnotationRow: View {
         let app = item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string
         return [app, item["native"]["project"].string].filter { !$0.isEmpty }.joined(separator: " · ")
     }
+    /// The header's ⋯ column, so the icon and status line up with the header controls (Operator's `controlWidth`).
+    static let controlWidth = Kit.toolbarGroupHeight + 2
+    /// Operator's flyout time: "9:02 PM", "9:02 PM - Yesterday" or "9:02 PM - 2026-10-12".
+    static func timestamp(_ milliseconds: Double, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard milliseconds > 0 else { return "" }
+        let date = Date(timeIntervalSince1970: milliseconds / 1000)
+        let clock = DateFormatter(); clock.calendar = calendar; clock.timeZone = calendar.timeZone; clock.setLocalizedDateFormatFromTemplate("jmm")
+        let time = clock.string(from: date)
+        let diff = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        if diff == 0 { return time }
+        if diff == 1 { return "\(time) - Yesterday" }
+        let day = DateFormatter(); day.locale = Locale(identifier: "en_US_POSIX"); day.calendar = Calendar(identifier: .gregorian); day.timeZone = calendar.timeZone; day.dateFormat = "yyyy-MM-dd"
+        return "\(time) - \(day.string(from: date))"
+    }
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .top, spacing: 10) {
+            // The first line's cap height starts at the icon's top edge, as in Operator.
+            HStack(alignment: .capTop, spacing: Kit.Space.m) {
                 MenuAppIcon(bundleId: item["native"]["app"]["bundleId"].string)
+                    .frame(width: Self.controlWidth).alignmentGuide(.capTop) { $0[.top] + 1.5 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item["comment"].string).font(.kitBody).foregroundStyle(.primary).lineLimit(2)
-                        .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-                    if !details.isEmpty { Text(details).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                KitIconImage(status.icon, size: 12).foregroundStyle(.secondary).padding(.top, 3).help(status.label)
+                    Text(item["comment"].string).font(.kitBody).foregroundStyle(.primary).lineLimit(5).truncationMode(.tail)
+                        .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 6) {
+                        if !details.isEmpty { Text(details).lineLimit(1).truncationMode(.tail).layoutPriority(-1); Text(verbatim: "·").foregroundStyle(.tertiary) }
+                        Text(verbatim: Self.timestamp(item["createdAt"].double)).monospacedDigit().fixedSize()
+                    }.font(.kitDetail).foregroundStyle(.secondary)
+                }.alignmentGuide(.capTop) { $0[.firstTextBaseline] - NSFont.systemFont(ofSize: 14).capHeight }
+                KitIconImage(status.icon, size: 12).foregroundStyle(.secondary).frame(width: Self.controlWidth)
+                    .alignmentGuide(.capTop) { $0[.top] }.help(status.label)
             }
-            .padding(Kit.rowInset)
-            .background(hovering ? Color.kitHover : .clear, in: RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: Kit.Radius.row, style: .continuous))
+            .padding(.horizontal, Kit.columnMargin).padding(.vertical, Kit.rowInset)
+            .background(hovering ? Color.kitHover : .clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel("\(item["comment"].string), \(status.label)")
     }
+}
+
+extension VerticalAlignment {
+    private enum CapTopAlignment: AlignmentID { static func defaultValue(in context: ViewDimensions) -> CGFloat { context[.top] } }
+    /// The top of the capital letters of a row's first line, as in Operator's rows.
+    static let capTop = VerticalAlignment(CapTopAlignment.self)
 }
 
 /// The installed app's icon at 26 pt, as in Operator's `AppIconTile`, or a quiet tile when unknown.
