@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DesignKit
 import AnnotatorCore
 
@@ -12,6 +13,7 @@ struct MainWindow: View {
         }
         .kitAppearance()
         .onChange(of: model.page) { _, _ in
+            model.marked = []
             if !["settings", "projects"].contains(model.page), !model.filtered.contains(where: { $0["id"].string == model.selected }) { model.selected = "" }
         }
         .alert("Annotator", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
@@ -20,15 +22,9 @@ struct MainWindow: View {
     }
     private var sidebar: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Spacer()
-                KitToolbarGroup {
-                    KitToolbarButton(icon: .sync, help: model.state["health"]["title"].string) { model.act("retry_now"); Task { await model.load() } }
-                    KitToolbarButton(icon: .edit, help: "Annotate screen") { model.act("toggle_annotating") }
-                }
-            }.padding(.trailing, 14).frame(height: Kit.barHeight)
+            // The first row lines up with the first row of the list beside it.
+            Color.clear.frame(height: Kit.barHeight - Kit.shellInset + Kit.columnMargin + Self.rowOffset)
             VStack(spacing: 2) {
-                KitSectionLabel("Annotations")
                 row("All annotations", .allItems, "all", model.items.count)
                 row("Open", .clock, "open", model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int)
                 row("Finished", .done, "done", model.state["queue"]["done"].int)
@@ -40,6 +36,8 @@ struct MainWindow: View {
             }.padding(Kit.sidebarInset)
         }
     }
+    /// Half the difference between a list row (50 pt) and a sidebar row, so their centres meet.
+    static let rowOffset: CGFloat = 8
     private func row(_ title: String, _ icon: KitIcon, _ page: String, _ count: Int?) -> some View {
         KitSidebarRow(title, icon: icon, count: count, selected: model.page == page || (page == "projects" && model.page.hasPrefix("project:"))) { model.navigate(page) }
     }
@@ -55,6 +53,8 @@ struct PageBar<Actions: View>: View {
 struct AnnotationList: View {
     @Bindable var model: AppModel
     @State private var clear = false
+    @State private var archive: String?
+    @State private var deleteMarked = false
     var body: some View {
         ScrollViewReader { proxy in
             KitScrollView {
@@ -68,8 +68,8 @@ struct AnnotationList: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 70)
                     }
                     ForEach(model.filtered, id: \.self) { item in
-                        EntryListRow(title: item["comment"].string, subtitle: item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string, selected: model.selected == item["id"].string) {
-                            model.selected = item["id"].string
+                        EntryListRow(title: item["comment"].string, subtitle: item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string, selected: model.selected == item["id"].string || model.marked.contains(item["id"].string)) {
+                            pick(item["id"].string)
                         } icon: {
                             Text("\(item["number"].int)").font(.kitDetail.weight(.semibold)).monospacedDigit()
                                 .frame(width: 26, height: 26).background(Color.kitTile, in: RoundedRectangle(cornerRadius: 7))
@@ -90,17 +90,59 @@ struct AnnotationList: View {
                     }
                     if model.searching { KitHeaderSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
                     else { Text(model.pageTitle).font(.kitTitle).lineLimit(1); Spacer() }
+                    if model.marked.count > 1 {
+                        KitToolbarGroup { KitToolbarButton(icon: .trash, help: "Delete \(model.marked.count) annotations") { deleteMarked = true } }
+                    }
                     KitToolbarGroup {
                         if !model.searching { KitToolbarButton(icon: .search, help: "Search annotations") { model.searching = true } }
                         KitToolbarButton(icon: .plus, help: "Annotate screen") { model.act("toggle_annotating") }
-                        KitToolbarMenu { Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string(model.page.hasPrefix("project:") ? String(model.page.dropFirst("project:".count)) : "all")]) }; Button("Clear all open annotations…", role: .destructive) { clear = true } }
+                        KitToolbarMenu {
+                            Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string(model.page.hasPrefix("project:") ? String(model.page.dropFirst("project:".count)) : "all")]) }
+                            Divider()
+                            Button("Archive finished annotations…") { archive = "done" }
+                            Button("Archive all annotations…") { archive = "all" }
+                            Button("Clear all open annotations…", role: .destructive) { clear = true }
+                        }
                     }
                 }.padding(.leading, Kit.columnContent).padding(.trailing, Kit.columnMargin).frame(height: Kit.containerBarHeight)
             }
         }
+        .confirmationDialog(archiveTitle, isPresented: Binding(get: { archive != nil }, set: { if !$0 { archive = nil } })) {
+            Button("Archive", role: .destructive) { delete(archiving.map { $0["id"].string }); archive = nil }
+        } message: { Text("Archiving deletes them from the server.") }
+        .confirmationDialog("Delete \(model.marked.count) annotations?", isPresented: $deleteMarked) {
+            Button("Delete", role: .destructive) { delete(Array(model.marked)); model.marked = [] }
+        }
         .confirmationDialog("Delete open annotations from all projects? Finished annotations stay.", isPresented: $clear) {
             Button("Delete open annotations", role: .destructive) { Task { do { let result = try await model.call("clear_open"); if result["failed"].int > 0 { model.error = "\(result["failed"].int) annotations could not be deleted." } } catch { model.error = error.localizedDescription } } }
         }
+    }
+    /// The annotations on this page that an archive removes: the finished ones, or all of them.
+    private var archiving: [JSON] { model.filtered.filter { archive == "all" || $0["status"].string == "done" } }
+    private var archiveTitle: String {
+        let count = archiving.count
+        return "Archive \(count) \(archive == "all" ? "" : "finished ")annotation\(count == 1 ? "" : "s") on \(model.pageTitle)?"
+    }
+    private func delete(_ ids: [String]) {
+        Task {
+            var failed = 0
+            for id in ids { do { _ = try await model.call("delete_annotation", ["id": .string(id)]) } catch { failed += 1 } }
+            if failed > 0 { model.error = "\(failed) annotations could not be deleted." }
+        }
+    }
+    /// A plain click selects; ⌘-click adds or removes a row; ⇧-click adds the rows up to it.
+    private func pick(_ id: String) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) || flags.contains(.shift) {
+            if model.marked.isEmpty, !model.selected.isEmpty { model.marked = [model.selected] }
+            if flags.contains(.shift), let from = model.filtered.firstIndex(where: { $0["id"].string == model.selected }),
+               let to = model.filtered.firstIndex(where: { $0["id"].string == id }) {
+                model.marked.formUnion(model.filtered[min(from, to)...max(from, to)].map { $0["id"].string })
+            } else if model.marked.contains(id) { model.marked.remove(id) } else { model.marked.insert(id) }
+        } else {
+            model.marked = []
+        }
+        model.selected = id
     }
     private func move(_ offset: Int) {
         let items = model.filtered; guard !items.isEmpty else { return }

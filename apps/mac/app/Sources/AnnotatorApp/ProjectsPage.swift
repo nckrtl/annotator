@@ -7,6 +7,7 @@ struct ProjectsPage: View {
     @Bindable var model: AppModel
     @State private var editing: JSON?
     @State private var deleting: JSON?
+    @State private var deleteMarked = false
     private var projects: [JSON] {
         model.projects.filter { project in
             model.search.isEmpty || ["name", "root", "instructions"].map { project[$0].string }
@@ -39,6 +40,12 @@ struct ProjectsPage: View {
                 deleting = nil
             }
         }
+        .confirmationDialog("Delete \(model.marked.count) projects? Their annotations stay on the server.", isPresented: $deleteMarked) {
+            Button("Delete projects", role: .destructive) {
+                let marked = model.marked; model.marked = []
+                Task { do { try await saveProjects(model, model.projects.filter { !marked.contains($0["id"].string) }) } catch { model.error = error.localizedDescription } }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .demoProjectEditor)) { note in
             editing = note.object as? String == "add" ? newProject() : model.selectedProject ?? model.projects.first ?? newProject()
         }
@@ -49,8 +56,8 @@ struct ProjectsPage: View {
                 LazyVStack(spacing: 2) {
                     if !model.projectsError.isEmpty { KitGroup { KitNotice(model.projectsError, tone: .error) } }
                     ForEach(projects, id: \.self) { project in
-                        EntryListRow(title: project["name"].string, subtitle: projectSubtitle(project), selected: model.selectedProjectID == project["id"].string) {
-                            model.selectedProjectID = project["id"].string
+                        EntryListRow(title: project["name"].string, subtitle: projectSubtitle(project), selected: model.selectedProjectID == project["id"].string || model.marked.contains(project["id"].string)) {
+                            pick(project["id"].string)
                         } icon: { ProjectIcon() } trailing: { EmptyView() }
                         .id(project["id"].string)
                     }
@@ -68,6 +75,9 @@ struct ProjectsPage: View {
                 HStack(spacing: 8) {
                     if model.searching { KitHeaderSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
                     else { Text("Projects").font(.kitTitle); Spacer() }
+                    if model.marked.count > 1 {
+                        KitToolbarGroup { KitToolbarButton(icon: .trash, help: "Delete \(model.marked.count) projects") { deleteMarked = true } }
+                    }
                     KitToolbarGroup {
                         if !model.searching { KitToolbarButton(icon: .search, help: "Search projects (⌘F)") { model.searching = true } }
                         KitToolbarButton(icon: .plus, help: "Add project") { editing = newProject() }.disabled(model.projectsSaving || !model.projectsError.isEmpty)
@@ -83,6 +93,20 @@ struct ProjectsPage: View {
             .onKeyPress(.upArrow) { move(-1); return .handled }
             .onKeyPress(.downArrow) { move(1); return .handled }
         }
+    }
+    /// A plain click selects; ⌘-click adds or removes a project; ⇧-click adds the projects up to it.
+    private func pick(_ id: String) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) || flags.contains(.shift) {
+            if model.marked.isEmpty, !model.selectedProjectID.isEmpty { model.marked = [model.selectedProjectID] }
+            if flags.contains(.shift), let from = projects.firstIndex(where: { $0["id"].string == model.selectedProjectID }),
+               let to = projects.firstIndex(where: { $0["id"].string == id }) {
+                model.marked.formUnion(projects[min(from, to)...max(from, to)].map { $0["id"].string })
+            } else if model.marked.contains(id) { model.marked.remove(id) } else { model.marked.insert(id) }
+        } else {
+            model.marked = []
+        }
+        model.selectedProjectID = id
     }
     private func move(_ direction: Int) {
         guard !projects.isEmpty else { return }

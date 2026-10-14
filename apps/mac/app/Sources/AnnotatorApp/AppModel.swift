@@ -15,6 +15,8 @@ import AnnotatorCore
     var items: [JSON] = []
     var page = "all"
     var selected = ""
+    /// Rows picked with ⌘- or ⇧-click, for deleting several at once. Cleared by a plain click.
+    var marked: Set<String> = []
     var search = ""
     var searching = false
     var error: String? {
