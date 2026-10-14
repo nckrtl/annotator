@@ -78,7 +78,7 @@ for line in sys.stdin:
         try:
             environment = os.environ | {'HOME': str(temp), 'ANNOTATOR_HELPER': str(helper)}
             stderr = (temp / 'core.log').open('w')
-            process = subprocess.Popen([str(MAC / 'src-tauri/target/debug/annotator')], env=environment,
+            process = subprocess.Popen([str(Path(os.environ.get('CARGO_TARGET_DIR', MAC / 'src-tauri/target')) / 'debug/annotator')], env=environment,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
             messages = queue.Queue()
             events = []
@@ -108,13 +108,25 @@ for line in sys.stdin:
             assert json.loads((settings_dir / 'settings.json').read_text())['t3Effort'] == 'high'
             assert call('save_projects', routes={'projects': [{'id': 'fixture', 'name': 'Fixture project',
                 'root': str(temp), 'bundleIds': ['com.example.fixture']}]}) is None
+            routes = call('get_projects')['routes']['projects']
+            project = routes[0]
+            project.update(name='Renamed project', notes='Run checks', t3Model='test/model',
+                           t3RuntimeMode='full-access', titleContains=['Fixture'], urlPrefixes=[])
+            other = dict(project, id='other', name='Other project', bundleIds=['com.example.other'])
+            assert call('save_projects', routes={'projects': [other, project]}) is None
+            assert call('get_projects')['routes']['projects'] == [other, project]
+            assert call('save_projects', routes={'projects': [project, other]}) is None
+            assert call('get_projects')['routes']['projects'] == [project, other]
             call('toggle_annotating')
             wait_for(lambda: any(e.get('event') == 'comment-opened' for e in events) or (call('get_state') and False))
             call('submit_comment', text='Native bridge smoke test')
             items = wait_for(lambda: call('get_queue'))
             first = items[0]
             assert first['comment'] == 'Native bridge smoke test'
-            assert first['native']['project'] == 'Fixture project'
+            assert first['native']['project'] == 'Renamed project'
+            assert call('save_projects', routes={'projects': [other]}) is None
+            assert call('get_projects')['routes']['projects'] == [other]
+            assert call('get_queue')[0]['id'] == first['id']
             assert call('get_screenshot', id=first['id']).startswith('data:image/png;')
             assert any(e.get('event') == 'queue' for e in events)
             server.terminate(); server.wait(timeout=5)
@@ -141,7 +153,7 @@ for line in sys.stdin:
                 assert 'Unknown command' in str(error)
             process.stdin.close()
             assert process.wait(timeout=5) == 0
-            print('Core smoke passed: settings, permissions, hotkeys, routing, capture-to-submit, screenshot, live queue, offline retry, delete, invalid commands, EOF shutdown.')
+            print('Core smoke passed: settings, permissions, hotkeys, project CRUD and priority, routing, capture-to-submit, screenshot, live queue, offline retry, delete, invalid commands, EOF shutdown.')
         finally:
             if process and process.poll() is None:
                 process.terminate(); process.wait(timeout=5)

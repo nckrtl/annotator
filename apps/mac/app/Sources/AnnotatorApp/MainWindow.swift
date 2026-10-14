@@ -40,22 +40,16 @@ struct MainWindow: View {
                 row("All annotations", .allItems, "all", model.items.count)
                 row("Open", .clock, "open", model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int)
                 row("Finished", .done, "done", model.state["queue"]["done"].int)
-                if !model.projects.isEmpty {
-                    KitSectionLabel("Projects")
-                    ForEach(model.projects, id: \.self) { project in
-                        row(project["name"].string, .folder, "project:" + project["id"].string, nil)
-                    }
-                }
+                row("Projects", .folder, "projects", model.projects.count)
             }.padding(.horizontal, Kit.sidebarInset)
             Spacer()
             VStack(spacing: 2) {
-                row("Manage projects", .folder, "projects", nil)
                 row("Settings", .settings, "settings", nil)
             }.padding(Kit.sidebarInset)
         }
     }
     private func row(_ title: String, _ icon: KitIcon, _ page: String, _ count: Int?) -> some View {
-        KitSidebarRow(title, icon: icon, count: count, selected: model.page == page) { model.page = page; model.search = "" }
+        KitSidebarRow(title, icon: icon, count: count, selected: model.page == page || (page == "projects" && model.page.hasPrefix("project:"))) { model.navigate(page) }
     }
 }
 struct PageBar<Actions: View>: View {
@@ -71,7 +65,7 @@ struct AnnotationList: View {
     @State private var clear = false
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            KitScrollView {
                 LazyVStack(spacing: 2) {
                     if model.state["health"]["tone"].string != "ok" {
                         KitGroup { KitNotice(model.state["health"]["title"].string.isEmpty ? "Connecting…" : model.state["health"]["title"].string,
@@ -82,10 +76,14 @@ struct AnnotationList: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 70)
                     }
                     ForEach(model.filtered, id: \.self) { item in
-                        Button { model.selected = item["id"].string } label: {
-                            AnnotationRow(item: item).padding(Kit.rowInset)
-                                .background(model.selected == item["id"].string ? Color.kitSelection : .clear, in: RoundedRectangle(cornerRadius: Kit.Radius.row))
-                        }.buttonStyle(.plain).id(item["id"].string)
+                        EntryListRow(title: item["comment"].string, subtitle: item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string, selected: model.selected == item["id"].string) {
+                            model.selected = item["id"].string
+                        } icon: {
+                            Text("\(item["number"].int)").font(.kitDetail.weight(.semibold)).monospacedDigit()
+                                .frame(width: 26, height: 26).background(Color.kitTile, in: RoundedRectangle(cornerRadius: 7))
+                        } trailing: {
+                            KitIconImage(item["question"].bool ? .warning : item["status"].string == "done" ? .done : item["status"].string == "todo" ? .clock : .sync, size: 12).foregroundStyle(.secondary)
+                        }.id(item["id"].string)
                     }
                 }.padding(Kit.columnMargin).padding(.bottom, 28)
             }
@@ -93,20 +91,22 @@ struct AnnotationList: View {
             .onKeyPress(.upArrow) { move(-1); return .handled }
             .onKeyPress(.downArrow) { move(1); return .handled }
             .focusable().focusEffectDisabled()
-            .kitBottomFade()
             .kitTopBar {
                 HStack(spacing: 8) {
+                    if model.page.hasPrefix("project:") {
+                        KitIconButton(.restore, help: "Back to project") { model.navigate("projects") }
+                    }
                     if model.searching { KitSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
-                    else { Text(model.pageTitle).font(.kitTitle); Spacer() }
+                    else { Text(model.pageTitle).font(.kitTitle).lineLimit(1); Spacer() }
                     KitToolbarGroup {
                         if !model.searching { KitToolbarButton(icon: .search, help: "Search annotations") { model.searching = true } }
                         KitToolbarButton(icon: .plus, help: "Annotate screen") { model.act("toggle_annotating") }
-                        KitToolbarMenu { Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string("all")]) }; Button("Clear open annotations…", role: .destructive) { clear = true } }
+                        KitToolbarMenu { Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string(model.page.hasPrefix("project:") ? String(model.page.dropFirst("project:".count)) : "all")]) }; Button("Clear all open annotations…", role: .destructive) { clear = true } }
                     }
                 }.padding(.leading, Kit.columnContent).padding(.trailing, Kit.columnMargin).frame(height: Kit.containerBarHeight)
             }
         }
-        .confirmationDialog("Delete all open annotations? Finished annotations stay.", isPresented: $clear) {
+        .confirmationDialog("Delete open annotations from all projects? Finished annotations stay.", isPresented: $clear) {
             Button("Delete open annotations", role: .destructive) { Task { do { let result = try await model.call("clear_open"); if result["failed"].int > 0 { model.error = "\(result["failed"].int) annotations could not be deleted." } } catch { model.error = error.localizedDescription } } }
         }
     }
@@ -128,5 +128,30 @@ struct AnnotationRow: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             KitIconImage(item["question"].bool ? .warning : item["status"].string == "done" ? .done : item["status"].string == "todo" ? .clock : .sync, size: 12).foregroundStyle(.secondary)
         }.contentShape(Rectangle())
+    }
+}
+
+/// The same entry row in both collection columns, using Vault's 26 pt tile and 50 pt row.
+struct EntryListRow<Icon: View, Trailing: View>: View {
+    let title: String
+    let subtitle: String
+    let selected: Bool
+    let action: () -> Void
+    @ViewBuilder let icon: Icon
+    @ViewBuilder let trailing: Trailing
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                icon
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.kitBody).lineLimit(1)
+                    Text(subtitle).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                trailing
+            }.padding(.horizontal, Kit.rowInset).frame(height: 50)
+                .background(selected ? Color.kitSelection : hovering ? Color.kitHover : .clear, in: RoundedRectangle(cornerRadius: Kit.Radius.row))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hovering = $0 }.accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
