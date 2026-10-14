@@ -154,7 +154,6 @@ struct MenuPanel: View {
     @Bindable var model: AppModel
     @State private var contentHeight: CGFloat = 480
     @State private var scrolled = false
-    private static let bottomInset: CGFloat = 5
     private var pending: Int { model.state["pending"]["count"].int }
     private var failed: Int { model.state["failedCount"].int }
     /// Pending and refused comments have their own notices; any other unhealthy state shows here.
@@ -185,20 +184,24 @@ struct MenuPanel: View {
                     }
                 }
             }
-            .padding(.horizontal, Kit.columnMargin).padding(.bottom, Kit.columnMargin)
+            .padding(.horizontal, Kit.columnMargin).padding(.bottom, 28)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollIndicators(.never)
+        // The list starts below the header and scrolls behind its frosted surface.
+        .contentMargins(.top, Kit.containerBarHeight, for: .scrollContent)
+        .kitBottomFade()
         // Like a sheet header: the line under the header shows only once content scrolls under it.
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, value in
             withAnimation(Kit.Motion.fast) { scrolled = value }
         }
-        // As in Operator's panel: glass scroll edges under the header and at the bottom.
-        .kitGlassScroll { Color.clear.frame(height: Kit.containerBarHeight) } bottomBar: { Color.clear.frame(height: Self.bottomInset) }
-        .overlay(alignment: .top) { header.overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5).opacity(scrolled ? 1 : 0) } }
+        .overlay(alignment: .top) {
+            header.background { KitHeaderSurface() }
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.kitSeparator).frame(height: 0.5).opacity(scrolled ? 1 : 0) }
+        }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
-        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight + Self.bottomInset, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
+        .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
     /// Annotations by day, newest first, labelled as Operator labels transcriptions.
