@@ -28,8 +28,10 @@ import DesignKit
                 .background(WindowOpener(model: model))
                 .onAppear { model.act("menu_opened") }
         } label: {
-            KitMenuBarIconView(.annotator, variant: model.isAnnotating ? .active : .standard, size: 18)
-                .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
+            if let image = KitBrandImages.menuBarIcon(.annotator, variant: model.isAnnotating ? .active : .standard) {
+                Image(nsImage: image)
+                    .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
+            }
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
             if count > 0 { Text("\(count)") }
         }.menuBarExtraStyle(.window)
