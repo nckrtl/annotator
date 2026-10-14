@@ -16,6 +16,7 @@ import ScreenCaptureKit
                 NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
                 Demo.populate(model)
                 try await statusItemShots(model, appearance: appearance, directory: directory)
+                if ProcessInfo.processInfo.environment["ANNOTATOR_MENU_ICONS_ONLY"] == "1" { continue }
                 let host = NSHostingView(rootView: MenuPanel(model: model).kitAppearance())
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
@@ -82,6 +83,8 @@ import ScreenCaptureKit
             try await settle()
             view.layoutSubtreeIfNeeded()
             let bounds = view.bounds
+            precondition(bounds.width > 18 && bounds.width < 120 && bounds.height > 0 && bounds.height <= 32,
+                         "Menu icon and fixture count must fit a native status item")
             guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw NSError(domain: "MenuCheck", code: 2) }
             bitmap.size = bounds.size
             view.cacheDisplay(in: bounds, to: bitmap)
