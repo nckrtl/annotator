@@ -121,7 +121,9 @@ fn is_trusted_executable(path: &Path) -> bool {
 /// Whether anything answers at `url` within 2 s: an existing server can serve the queue without
 /// becoming ours.
 pub async fn answers(url: &url::Url) -> bool {
-    crate::http::short().get(url.clone()).timeout(Duration::from_secs(2)).send().await.is_ok()
+    let mut health = url.clone();
+    health.set_path(&format!("{}/health", url.path().trim_end_matches('/').trim_end_matches("/annotations")));
+    crate::http::short().get(health).timeout(Duration::from_secs(2)).send().await.is_ok()
 }
 
 #[cfg(test)]
@@ -184,6 +186,7 @@ mod tests {
     async fn answers_reports_an_existing_server() {
         let server = crate::testutil::serve(vec![crate::testutil::Reply::new(404, "")]);
         assert!(answers(&server.url("/annotations")).await);
+        assert_eq!(server.paths(), ["/health"]);
         assert!(!answers(&crate::testutil::closed_url("/annotations")).await);
     }
 

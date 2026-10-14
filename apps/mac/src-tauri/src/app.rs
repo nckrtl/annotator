@@ -13,7 +13,7 @@ use crate::settings::{home, Settings};
 use crate::{helper, panels, windows};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
@@ -51,8 +51,6 @@ pub struct Core {
     pub server: ServerState,
     pub projects: ProjectsStore,
     pub comment: Option<Comment>,
-    /// A click elsewhere is moving the comment: when it started and where to select next.
-    pub moving: Option<(Instant, f64, f64)>,
     /// The record of the last submitted annotation, to fill in project rules.
     pub last_target: Option<Value>,
     pub helper_error: Option<String>,
@@ -114,7 +112,6 @@ pub fn setup(app: &crate::runtime::AppHandle) {
             server: ServerState::default(),
             projects: ProjectsStore::new(Routes::standard_file()),
             comment: None,
-            moving: None,
             last_target: None,
             helper_error: None,
             screen_pane_pending: false,
@@ -392,7 +389,7 @@ fn start_annotating(app: &crate::runtime::AppHandle) {
 
 pub fn release_overlay(app: &crate::runtime::AppHandle) {
     let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
-    let commenting = with(app, |core| { core.annotating = false; core.moving = None; core.comment.is_some() });
+    let commenting = with(app, |core| { core.annotating = false; core.comment.is_some() });
     if commenting { register_escape(app); } else { hotkey::unregister(app, Slot::Escape); }
     emit_state(app);
 }
@@ -408,7 +405,6 @@ pub fn stop_annotating(app: &crate::runtime::AppHandle) {
 /// Closes the comment panel without resuming the overlay; the view cancels Operator.
 fn drop_comment(app: &crate::runtime::AppHandle) {
     let had = with(app, |core| {
-        core.moving = None;
         core.comment.take().is_some()
     });
     if had {
@@ -434,7 +430,6 @@ pub fn helper_event(app: &crate::runtime::AppHandle, event: Value) {
             screen_recording: event["screenRecording"].as_bool().unwrap_or(false),
         }),
         "selected" => selected(app, event),
-        "clickWhileFrozen" => move_comment(app, event["x"].as_f64().unwrap_or(0.0), event["y"].as_f64().unwrap_or(0.0)),
         "escape" | "overlay-timeout" => stop_annotating(app),
         "log" => crate::log(&format!("helper: {}", event["message"].as_str().unwrap_or_default())),
         "error" => {
@@ -526,7 +521,6 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
             return false;
         }
         core.comment = Some(Comment { record });
-        core.moving = None;
         true
     });
     if !opened {
@@ -551,14 +545,6 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
 fn comment_closed(app: &crate::runtime::AppHandle) {
     panels::hide_comment(app);
     hotkey::unregister(app, Slot::Escape);
-    let annotating = with(app, |core| {
-        core.moving = None;
-        core.annotating
-    });
-    if annotating {
-        let _ = helper::send(app, &json!({"action": "resume"}));
-        register_escape(app);
-    }
     emit_state(app);
 }
 
@@ -601,42 +587,6 @@ pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str) -> Result<(),
 pub fn cancel_comment(app: &crate::runtime::AppHandle) {
     stop_annotating(app);
     panels::hide_comment(app);
-}
-
-/// Like the web annotator: a click elsewhere stops dictation, waits for the paste, submits the
-/// open comment, and opens a new one at the click. The view finishes dictation first.
-fn move_comment(app: &crate::runtime::AppHandle, x: f64, y: f64) {
-    let start = with(app, |core| {
-        // A finish that never answered does not block clicks forever (a stop waits at most 125 s).
-        let busy = core.moving.is_some_and(|(at, _, _)| at.elapsed() < Duration::from_secs(130));
-        if core.comment.is_none() || busy {
-            return false;
-        }
-        core.moving = Some((Instant::now(), x, y));
-        true
-    });
-    if start {
-        let _ = app.emit_to("comment", "comment-finish", ());
-    }
-}
-
-/// The view finished dictation. `keep`: it failed, so the panel stays open and says why.
-pub fn comment_finish_done(app: &crate::runtime::AppHandle, submit: bool, text: &str, keep: bool) {
-    let Some((_, x, y)) = with(app, |core| core.moving.take()) else { return };
-    if keep {
-        return;
-    }
-    if with(app, |core| core.comment.is_some()) {
-        if submit && !text.trim().is_empty() {
-            let _ = submit_comment(app, text);
-        } else {
-            cancel_comment(app);
-        }
-    }
-    hotkey::unregister(app, Slot::Escape);
-    if with(app, |core| core.annotating) {
-        let _ = helper::send(app, &json!({"action": "selectAt", "x": x, "y": y}));
-    }
 }
 
 // MARK: - Menu

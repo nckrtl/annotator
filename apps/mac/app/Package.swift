@@ -6,5 +6,6 @@ let package = Package(name: "AnnotatorApp", platforms: [.macOS(.v26)], products:
 ], targets: [
     .target(name: "AnnotatorCore"),
     .executableTarget(name: "AnnotatorApp", dependencies: ["AnnotatorCore", "DesignKit"]),
-    .testTarget(name: "AnnotatorCoreTests", dependencies: ["AnnotatorCore"])
+    .testTarget(name: "AnnotatorCoreTests", dependencies: ["AnnotatorCore"]),
+    .testTarget(name: "AnnotatorAppTests", dependencies: ["AnnotatorApp"])
 ])

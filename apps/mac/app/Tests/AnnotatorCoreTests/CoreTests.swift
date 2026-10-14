@@ -188,6 +188,30 @@ import Testing
     #expect(voice.phase == "idle")
 }
 
+@MainActor @Test func priorDictationFailureDoesNotBlockExistingTypedText() async throws {
+    for failure in ["notRunning", "unauthorized", "failed"] {
+        let voice = Dictation(); var calls: [String] = []
+        voice.text = { "Fix button alignment" }
+        voice.call = { action in
+            calls.append(action)
+            return .object(["result": .string(action == "start" ? failure : "ok")])
+        }
+        voice.start()
+        try await waitUntil { voice.phase == "idle" && voice.error != nil }
+        try await voice.finish()
+        #expect(voice.text() == "Fix button alignment")
+        #expect(voice.error == nil)
+        #expect(!calls.contains("stop"))
+    }
+}
+
+@Test func cancelledAnnotationsAreFinished() {
+    let items: [JSON] = ["todo", "in_progress", "done", "cancelled"].map { .object(["status": .string($0)]) }
+    #expect(items.filter { AnnotationCollection.isOpen($0) }.count == 2)
+    #expect(items.filter { !AnnotationCollection.isOpen($0) }.count == 2)
+    #expect(AnnotationCollection.items(items, page: "done", projects: [], search: "").map { $0["status"].string } == ["done", "cancelled"])
+}
+
 @MainActor @Test func stopDeadlineAndMissingPasteReleaseAndKeepDraft() async throws {
     for slow in [true, false] {
         let voice = Dictation(); var calls: [String] = []; var releases: [String] = []

@@ -27,7 +27,12 @@ import {
     pushAnnotation,
 } from "./sync";
 import type { Annotation, AnnotationDraft } from "./types";
-import { currentBreakpoint, currentScreenSize, currentScrollPosition } from "./viewport";
+import {
+    annotationViewportBox,
+    currentBreakpoint,
+    currentScreenSize,
+    currentScrollPosition,
+} from "./viewport";
 
 let currentPathname = "";
 let annotationGeneration = 0;
@@ -78,6 +83,7 @@ export function draftFromPoint(clientX: number, clientY: number): AnnotationDraf
         pathname: window.location.pathname,
         screenSize: currentScreenSize(),
         scrollPosition: currentScrollPosition(),
+        scrollOffset: { x: window.scrollX, y: window.scrollY },
         breakpoint: currentBreakpoint(),
         ...resolveAnnotationContext(element),
     };
@@ -562,7 +568,7 @@ export function cancelDraft(): void {
 }
 
 function resolveTargetElement(annotation: Annotation): HTMLElement | undefined {
-    const box = annotation.boundingBox;
+    const box = annotationViewportBox(annotation, { x: window.scrollX, y: window.scrollY });
 
     if (!box || box.width === 0 || box.height === 0) {
         return undefined;
@@ -586,10 +592,12 @@ function resolveTargetElement(annotation: Annotation): HTMLElement | undefined {
 }
 
 export function startEdit(annotation: Annotation, clientX?: number, clientY?: number): void {
-    const box = annotation.boundingBox;
+    const box = annotationViewportBox(annotation, { x: window.scrollX, y: window.scrollY });
 
     draft.value = {
         ...annotationContextFields(annotation),
+        scrollPosition: currentScrollPosition(),
+        scrollOffset: { x: window.scrollX, y: window.scrollY },
         annotationId: annotation.id,
         x: annotation.x,
         y: annotation.y,

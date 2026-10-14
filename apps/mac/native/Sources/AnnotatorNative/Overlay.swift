@@ -16,8 +16,8 @@ final class OverlayController {
     enum State {
         case hovering(Target?)
         case dragging(start: CGPoint, end: CGPoint)
-        /// A target was picked; the comment panel is open.
-        case frozen(Target)
+        /// Selection is finished and the panels are gone.
+        case selected
     }
 
     private let reader: AXReader
@@ -25,8 +25,6 @@ final class OverlayController {
     private var panels: [OverlayPanel] = []
     private(set) var state: State = .hovering(nil)
     var onSelect: ((Target) -> Void)?
-    /// A click on the overlay while the comment panel is open: finish that comment, then move here.
-    var onClickWhileFrozen: ((CGPoint) -> Void)?
     /// Esc while an overlay panel is key. A backup for Annotator's global Esc hotkey.
     var onEscape: (() -> Void)?
 
@@ -84,13 +82,6 @@ final class OverlayController {
         NSCursor.arrow.set()
     }
 
-    /// Back to hovering after the comment panel closes.
-    func resume() {
-        state = .hovering(nil)
-        redraw()
-        mouseMoved()
-    }
-
     // MARK: - Events from the panels
 
     var cursor: CGPoint { Geometry.topLeft(fromAppKit: NSEvent.mouseLocation, mainScreenHeight: NSScreen.mainHeight) }
@@ -132,15 +123,9 @@ final class OverlayController {
         case .hovering:
             let point = cursor
             Task { await selectElement(at: point) }
-        case .frozen:
-            onClickWhileFrozen?(cursor)
+        case .selected:
+            break
         }
-    }
-
-    /// Picks the element at `point` directly, for a click made while the comment panel was open.
-    func select(at point: CGPoint) {
-        state = .hovering(nil)
-        Task { await selectElement(at: point) }
     }
 
     // MARK: - Hit testing
@@ -173,7 +158,7 @@ final class OverlayController {
         let session = generation
         guard let target = await resolve(point, dom: true), session == generation, isVisible else { return }
         guard case .hovering = state else { return }
-        freeze(target)
+        finishSelection(target)
     }
 
     /// Accessibility first. `dom` asks DevTools for the real element. Hover leaves it off:
@@ -199,19 +184,17 @@ final class OverlayController {
                 window: WindowInfo(title: nil, id: 0, frame: screen), frame: rect)
         }
         guard session == generation, isVisible else { return }
-        freeze(target)
+        finishSelection(target)
     }
 
-    private func freeze(_ target: Target) {
+    private func finishSelection(_ target: Target) {
         hide(reason: "target-selected")
-        state = .frozen(target)
-        redraw()
-        NSCursor.arrow.set()
+        state = .selected
         onSelect?(target)
     }
 
     #if DEBUG
-    func showDemo(_ target: Target) { state = .frozen(target) }
+    func showDemo(_ target: Target) { state = .hovering(target) }
     #endif
 
     private func redraw() {
@@ -241,10 +224,10 @@ final class OverlayPanel: NSPanel {
         contentView = OverlayView(controller: controller)
     }
 
-    /// A click while hovering may make the panel key, so Esc reaches it. Never while frozen:
+    /// A click while hovering may make the panel key, so Esc reaches it. Never after selection:
     /// the comment panel in Annotator keeps the focus, and Operator's dictation pastes there.
     override var canBecomeKey: Bool {
-        if case .frozen = controller.state { return false }
+        if case .selected = controller.state { return false }
         return true
     }
     override var canBecomeMain: Bool { false }
@@ -285,7 +268,7 @@ final class OverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let window else { return }
         switch controller.state {
-        case .hovering(let target?), .frozen(let target):
+        case .hovering(let target?):
             drawTarget(target, in: window)
         case .dragging(let start, let end):
             let rect = CGRect(

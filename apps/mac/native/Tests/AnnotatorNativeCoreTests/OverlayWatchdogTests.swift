@@ -7,20 +7,29 @@ import Foundation
     var captured = true
     let watchdog = OverlayWatchdog(interval: .milliseconds(20)) { captured = false }
     watchdog.activity()
-    try await Task.sleep(for: .milliseconds(50))
+    // Allow executor scheduling under load, while bounding failure to release.
+    let clock = ContinuousClock()
+    let deadline = clock.now + .seconds(1)
+    while captured && clock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
     #expect(!captured)
+    watchdog.stop()
 }
 
 @MainActor @Test func overlayActivityRenewsAndClosingDisarms() async throws {
     var releases = 0
-    let watchdog = OverlayWatchdog(interval: .milliseconds(60)) { releases += 1 }
+    let watchdog = OverlayWatchdog(interval: .milliseconds(20)) { releases += 1 }
     watchdog.activity()
-    try await Task.sleep(for: .milliseconds(30))
+    // Renew before yielding: scheduler delays cannot expire the original lease first.
+    watchdog.interval = .seconds(60)
     watchdog.activity()
-    try await Task.sleep(for: .milliseconds(40))
+    try await Task.sleep(for: .milliseconds(100))
     #expect(releases == 0)
+    watchdog.interval = .milliseconds(20)
+    watchdog.activity()
     watchdog.stop()
-    try await Task.sleep(for: .milliseconds(70))
+    try await Task.sleep(for: .milliseconds(100))
     #expect(releases == 0)
 }
 

@@ -50,7 +50,7 @@ for line in sys.stdin:
     action = command.get('action')
     if action == 'ping': emit({'type': 'online'})
     if action == 'permissions': emit({'type': 'permissions', 'accessibility': True, 'screenRecording': True})
-    if action == 'selectAt' or (action == 'annotate' and command.get('on')):
+    if action == 'annotate' and command.get('on'):
         record = {'id': str(uuid.uuid4()), 'comment': '', 'element': 'AXButton "Save"',
             'url': 'app://com.example.fixture', 'screenshot': 'data:image/png;base64,aGVsbG8=',
             'native': {'app': {'name': 'Fixture', 'bundleId': 'com.example.fixture', 'pid': 123},

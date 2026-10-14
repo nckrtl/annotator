@@ -10,6 +10,7 @@ type ContextFields = Pick<
     | "pathname"
     | "screenSize"
     | "scrollPosition"
+    | "scrollOffset"
     | "breakpoint"
     | "screenshot"
     | "boundingBox"
@@ -30,6 +31,7 @@ export function annotationContextFields(current: AnnotationDraft | Annotation): 
         pathname: current.pathname,
         screenSize: current.screenSize,
         scrollPosition: current.scrollPosition,
+        scrollOffset: current.scrollOffset,
         breakpoint: current.breakpoint,
         screenshot: current.screenshot,
         boundingBox: current.boundingBox,

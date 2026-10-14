@@ -150,18 +150,19 @@ impl OperatorClient {
 enum Kind {
     Start,
     Cancel,
+    Stop,
 }
 
 /// Runs start and cancel one at a time. A cancel waits for a start in flight, is skipped when that
 /// start found no dictation, and is sent once: a second cancel without a start between is a no-op.
 /// A stop waits for the commands before it but does not hold the queue, so a cancel can follow it.
 pub struct OperatorQueue {
-    last: tokio::sync::Mutex<Option<(Kind, OperatorResult)>>,
+    last: tokio::sync::Mutex<(u64, Option<(Kind, OperatorResult)>)>,
 }
 
 impl Default for OperatorQueue {
     fn default() -> Self {
-        OperatorQueue { last: tokio::sync::Mutex::new(None) }
+        OperatorQueue { last: tokio::sync::Mutex::new((0, None)) }
     }
 }
 
@@ -173,23 +174,34 @@ impl OperatorQueue {
             "start" => {
                 let mut last = self.last.lock().await;
                 let result = client.start().await;
-                *last = Some((Kind::Start, result.clone()));
+                last.0 += 1;
+                last.1 = Some((Kind::Start, result.clone()));
                 Ok(answer(result))
             }
             "cancel" => {
                 let mut last = self.last.lock().await;
-                match &*last {
+                match &last.1 {
                     Some((_, OperatorResult::NoDictation)) => return Ok(answer(OperatorResult::Ok)),
                     Some((Kind::Cancel, previous)) => return Ok(answer(previous.clone())),
+                    Some((Kind::Stop, _)) => return Ok(answer(OperatorResult::Ok)),
                     _ => {}
                 }
                 let result = client.cancel().await;
-                *last = Some((Kind::Cancel, result.clone()));
+                last.0 += 1;
+                last.1 = Some((Kind::Cancel, result.clone()));
                 Ok(answer(result))
             }
             "stop" => {
-                drop(self.last.lock().await);
-                Ok(answer(client.stop().await))
+                let generation = self.last.lock().await.0;
+                let result = client.stop().await;
+                // A cancel can interrupt a stop in flight. A late stop must not
+                // clear the state of a newer recording or hide a failed stop.
+                let mut last = self.last.lock().await;
+                if last.0 == generation && matches!(result, OperatorResult::Ok | OperatorResult::NoDictation | OperatorResult::Silence) {
+                    last.0 += 1;
+                    last.1 = Some((Kind::Stop, result.clone()));
+                }
+                Ok(answer(result))
             }
             _ => Err(format!("Unknown Operator action: {action}")),
         }
@@ -308,5 +320,40 @@ mod tests {
         assert_eq!(queue.run(&ofide, "start").await.unwrap().result, OperatorResult::NoDictation);
         assert_eq!(queue.run(&ofide, "cancel").await.unwrap().result, OperatorResult::Ok);
         assert_eq!(server.paths(), ["/dictate/start"]);
+    }
+
+    #[tokio::test]
+    async fn finished_stop_skips_cancel_but_failed_stop_allows_cleanup() {
+        for status in [200, 409, 422, 500] {
+            let server = serve(vec![Reply::new(202, ""), Reply::new(status, ""), Reply::new(202, "")]);
+            let ofide = client(server.url(""));
+            let queue = OperatorQueue::default();
+            queue.run(&ofide, "start").await.unwrap();
+            queue.run(&ofide, "stop").await.unwrap();
+            queue.run(&ofide, "cancel").await.unwrap();
+            assert_eq!(server.paths(), if status == 500 {
+                vec!["/dictate/start", "/dictate-stop", "/dictate/cancel"]
+            } else { vec!["/dictate/start", "/dictate-stop"] });
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_can_interrupt_stop_and_a_late_stop_preserves_new_start() {
+        let server = serve(vec![Reply::new(202, ""), Reply::new(200, "").delayed(150), Reply::new(202, ""), Reply::new(202, ""), Reply::new(202, "")]);
+        let ofide = client(server.url(""));
+        let queue = Arc::new(OperatorQueue::default());
+        queue.run(&ofide, "start").await.unwrap();
+        let (q, c) = (queue.clone(), ofide.clone());
+        let stop = tokio::spawn(async move { q.run(&c, "stop").await });
+        for _ in 0..100 {
+            if server.paths().len() >= 2 { break; }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert_eq!(server.paths().len(), 2);
+        queue.run(&ofide, "cancel").await.unwrap();
+        queue.run(&ofide, "start").await.unwrap();
+        stop.await.unwrap().unwrap();
+        queue.run(&ofide, "cancel").await.unwrap();
+        assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel", "/dictate/start", "/dictate/cancel"]);
     }
 }

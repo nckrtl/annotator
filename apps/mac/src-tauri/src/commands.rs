@@ -98,10 +98,6 @@ pub fn cancel_comment(app: AppHandle) {
     app::cancel_comment(&app);
 }
 
-pub fn comment_finish_done(app: AppHandle, submit: bool, text: String, keep: Option<bool>) {
-    app::comment_finish_done(&app, submit, &text, keep.unwrap_or(false));
-}
-
 pub fn resize_comment(app: AppHandle, height: f64) {
     panels::resize_comment(&app, height);
 }
@@ -236,7 +232,6 @@ pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Valu
 "release_overlay" => { app::release_overlay(&app); Ok(Value::Null) },
 "stop_annotating" => { app::stop_annotating(&app); Ok(Value::Null) },
 "cancel_comment" => {  serde_json::to_value(cancel_comment(app.clone())).map_err(|e| e.to_string()) },
-"comment_finish_done" => { let submit: bool = serde_json::from_value(args["submit"].clone()).map_err(|e| format!("submit: {e}"))?; let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; let keep: Option<bool> = serde_json::from_value(args["keep"].clone()).map_err(|e| format!("keep: {e}"))?; serde_json::to_value(comment_finish_done(app.clone(), submit, text, keep)).map_err(|e| e.to_string()) },
 "resize_comment" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_comment(app.clone(), height)).map_err(|e| e.to_string()) },
 "ofide" => { let action: String = serde_json::from_value(args["action"].clone()).map_err(|e| format!("action: {e}"))?; serde_json::to_value(ofide(app.clone(), action).await?).map_err(|e| e.to_string()) },
 "alert" => { let title: String = serde_json::from_value(args["title"].clone()).map_err(|e| format!("title: {e}"))?; let message: String = serde_json::from_value(args["message"].clone()).map_err(|e| format!("message: {e}"))?; serde_json::to_value(alert(app.clone(), title, message)).map_err(|e| e.to_string()) },

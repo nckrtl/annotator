@@ -8,5 +8,6 @@ let package = Package(
         .target(name: "AnnotatorNativeCore"),
         .executableTarget(name: "AnnotatorNative", dependencies: ["AnnotatorNativeCore"]),
         .testTarget(name: "AnnotatorNativeCoreTests", dependencies: ["AnnotatorNativeCore"]),
+        .testTarget(name: "AnnotatorNativeTests", dependencies: ["AnnotatorNative"]),
     ]
 )

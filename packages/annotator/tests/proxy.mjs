@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:https";
+import { createServer as createHttpServer } from "node:http";
 import { createServer as createViteServer } from "vite";
 import { chromium } from "playwright";
 import { annotationServerProxy } from "../bin/vite.mjs";
@@ -11,6 +12,65 @@ import { annotationServerProxy } from "../bin/vite.mjs";
 const dir = await mkdtemp(join(tmpdir(), "annotate-proxy-test-"));
 const children = [];
 let browser, vite, web;
+// Identity probes must not read screenshots, and mutations must retain their query.
+async function checkProxyRequests() {
+    const seen = [];
+    const target = createHttpServer((req, res) => {
+        seen.push(req.url);
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+            JSON.stringify(
+                req.url === "/health"
+                    ? { service: "@nckrtl/annotator", ok: true }
+                    : { data: [], meta: { service: "@nckrtl/annotator" } },
+            ),
+        );
+    });
+    let middleware;
+    annotationServerProxy().configureServer({
+        middlewares: {
+            use: (fn) => {
+                middleware = fn;
+            },
+        },
+    });
+    const bridge = createHttpServer((req, res) =>
+        middleware(req, res, () => {
+            res.writeHead(404);
+            res.end();
+        }),
+    );
+    try {
+        await new Promise((resolve) => target.listen(0, "127.0.0.1", resolve));
+        await new Promise((resolve) => bridge.listen(0, "127.0.0.1", resolve));
+        const base = `http://127.0.0.1:${bridge.address().port}/__annotate/local/${target.address().port}/annotations`;
+        const query = "?pathname=%2Fpage%3Fx%3D1%26y%3Dtwo";
+        for (const [method, suffix] of [
+            ["DELETE", query],
+            ["POST", "/claim"],
+            ["GET", "/events"],
+        ]) {
+            seen.length = 0;
+            const response = await fetch(base + suffix, { method });
+            assert.equal(response.status, 200);
+            await response.text();
+            assert.deepEqual(seen, ["/health", "/annotations" + suffix]);
+        }
+        seen.length = 0;
+        const response = await fetch(base);
+        const body = await response.json();
+        assert.match(body.meta.eventsUrl, /\/annotations\/events$/);
+        assert.deepEqual(seen, ["/health", "/annotations"]);
+        assert.equal((await fetch(base, { headers: { Origin: "null" } })).status, 403);
+    } finally {
+        target.closeAllConnections();
+        bridge.closeAllConnections();
+        await Promise.all([
+            new Promise((resolve) => target.close(resolve)),
+            new Promise((resolve) => bridge.close(resolve)),
+        ]);
+    }
+}
 async function start() {
     const child = spawn(process.execPath, [
         "bin/serve.mjs",
@@ -33,6 +93,7 @@ async function start() {
     });
 }
 try {
+    await checkProxyRequests();
     execFileSync(
         "openssl",
         [
@@ -294,6 +355,31 @@ try {
             .waitFor({ state: "detached", timeout: 5000 });
         assert.deepEqual((await (await fetch(url)).json()).data, []);
         await page.unroute("**/__annotate/local/**");
+        const path = "/a page?x=1&y=two";
+        for (const [id, pathname] of [
+            ["page-clear", path],
+            ["other-page", "/other"],
+        ]) {
+            await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, pathname, comment: "Page scoped deletion" }),
+            });
+        }
+        const pageClear = await page.evaluate(
+            async ({ url, path }) => {
+                const response = await fetch(
+                    `/__annotate/local/${new URL(url).port}/annotations?pathname=${encodeURIComponent(path)}`,
+                    { method: "DELETE" },
+                );
+                return { status: response.status, body: await response.json() };
+            },
+            { url, path },
+        );
+        assert.equal(pageClear.status, 200);
+        assert.deepEqual(pageClear.body.data.removedIds, ["page-clear"]);
+        assert.ok((await (await fetch(url)).json()).data.some((item) => item.id === "other-page"));
+        await fetch(`${url}/other-page`, { method: "DELETE" });
     }
     console.log(
         "HTTPS bridge: fresh annotations on two random ports, no direct browser loopback, no transport metadata, live updates and refresh passed.",

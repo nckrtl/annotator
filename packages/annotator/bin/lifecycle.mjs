@@ -37,9 +37,11 @@ function alive(pid) {
 
 async function responds(url) {
     try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        const health = new URL(url);
+        health.pathname = health.pathname.replace(/\/annotations\/?$/, "/health");
+        const response = await fetch(health, { signal: AbortSignal.timeout(2000) });
         const body = await response.json();
-        return response.ok && body?.meta?.service === SERVICE;
+        return response.ok && body?.service === SERVICE;
     } catch {
         return false;
     }

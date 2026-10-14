@@ -83,8 +83,12 @@ import Observation
     }
     /// Returns only after a paste has settled; a failed dictation never submits stale text.
     public func finish() async throws {
-        let session = generation
         defer { release("finish-exit") }
+        try Task.checkCancellation()
+        // A completed failure remains visible, but a new Submit can send the
+        // user's existing text. Failures during this finish still block it.
+        if phase == "idle" { error = nil; return }
+        let session = generation
         do {
             try await withTaskCancellationHandler {
                 await startTask?.value

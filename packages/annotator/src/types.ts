@@ -57,6 +57,8 @@ export type Annotation = {
     route?: string;
     screenSize?: string;
     scrollPosition?: string;
+    /** Scroll offsets when the viewport-relative bounding box was recorded. */
+    scrollOffset?: { x: number; y: number };
     breakpoint?: string;
     screenshot?: string;
     react?: string;
@@ -87,6 +89,7 @@ export type AnnotationDraft = {
     route?: string;
     screenSize?: string;
     scrollPosition?: string;
+    scrollOffset?: { x: number; y: number };
     breakpoint?: string;
     screenshot?: string;
     react?: string;

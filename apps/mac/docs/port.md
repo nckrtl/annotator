@@ -55,8 +55,6 @@ Commands:
 | `requestScreenCapture` | | `CGRequestScreenCaptureAccess()`, then answer `permissions` |
 | `requestAccessibility` | | `AXIsProcessTrustedWithOptions(prompt: true)`, then answer `permissions` |
 | `annotate` | `on: bool` | show or hide the overlay (all screens) |
-| `resume` | | the comment panel closed: unfreeze the overlay and hover again |
-| `selectAt` | `x, y` (global top-left points) | select at this point as if clicked (moving the comment) |
 
 Events:
 
@@ -65,7 +63,6 @@ Events:
 | `online` | | ready |
 | `permissions` | `accessibility, screenRecording: bool` | |
 | `selected` | see below | the user clicked an element, a window or dragged a region; the capture is done; the overlay was removed before capture |
-| `clickWhileFrozen` | `x, y` | a click on the overlay while frozen (comment panel open) |
 | `overlay-timeout` | | the helper released its overlay after 15 s without input |
 | `escape` | | Esc while the overlay has focus (backup for the Carbon Esc hotkey) |
 | `log` | `message` | |
@@ -102,8 +99,6 @@ Persisted state:
 - `state`: the whole `AppState` (below), after every change. Windows also call `get_state` once.
 - `queue`: the full `QueueItem[]` list from the server (detail windows read their item from it).
 - `comment-opened`: `CommentTarget` (to the `comment` window), when the panel opens.
-- `comment-finish`: (to `comment`) a click elsewhere: finish dictation, then call
-  `comment_finish_done { submit: bool, text }`.
 - `comment-cancel`: stop dictation when annotate mode ends.
 
 ```ts
@@ -139,7 +134,7 @@ Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|
 `hide_menu`, `quit_app`.
 
 Comment: `submit_comment {text}` (closes the panel at once, posts in the background),
-`cancel_comment`, `comment_finish_done {submit, text}`, `ofide {action: "status"|"start"|"stop"|"cancel"}`
+`cancel_comment`, `ofide {action: "status"|"start"|"stop"|"cancel"}`
 (proxies the live `src-tauri/src/ofide.rs`; returns its JSON or an error string).
 `release_overlay` preserves the draft and ends selection. `stop_annotating` also
 closes the comment. The internal `ofide` command name is retained.
@@ -164,8 +159,6 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 - Submit → fill comment and project, save to the retry store, POST, hide the panel,
   unregister Escape. Start a new selection with the hotkey or menu.
 - Escape → close the panel immediately, cancel dictation, end selection.
-- The old `resume`/`selectAt`/`clickWhileFrozen` protocol remains for compatibility;
-  normal comments no longer use it or keep a full-screen click target.
 - Queue: SSE + polling (`QueueMonitor.swift`); retry pending when reachable.
 - Menu bar: `pencil.tip.crop.circle`, with its filled variant during selection,
   and the open count. Identity and signing remain unchanged.

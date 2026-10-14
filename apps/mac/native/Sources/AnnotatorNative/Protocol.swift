@@ -65,9 +65,6 @@ final class Helper {
 
     init() {
         overlay.onSelect = { [weak self] target in self?.select(target) }
-        overlay.onClickWhileFrozen = { point in
-            emit(["type": "clickWhileFrozen", "x": point.x, "y": point.y])
-        }
         overlay.onEscape = { [weak self] in self?.overlay.hide(reason: "escape"); emit(["type": "escape"]) }
     }
 
@@ -90,20 +87,12 @@ final class Helper {
         case "annotate":
             guard let on = command["on"] as? Bool else { return emitError("annotate needs a boolean \"on\".") }
             on ? overlay.show() : overlay.hide()
-        case "resume":
-            guard overlay.isVisible else { return }
-            overlay.resume()
-        case "selectAt":
-            guard let x = (command["x"] as? NSNumber)?.doubleValue, let y = (command["y"] as? NSNumber)?.doubleValue
-            else { return emitError("selectAt needs numbers \"x\" and \"y\".") }
-            guard overlay.isVisible else { return }
-            overlay.select(at: CGPoint(x: x, y: y))
         case let action:
             emitError("Unknown action: \(action ?? "none")")
         }
     }
 
-    /// The overlay froze on `target`. Capture before Annotator shows the panel,
+    /// The overlay was released after selecting `target`. Capture before Annotator shows the panel,
     /// so the image shows what the user clicked; then send the record.
     private func select(_ target: Target) {
         let generation = overlay.generation
@@ -124,7 +113,7 @@ final class Helper {
                 record = try JSONSerialization.jsonObject(with: annotation.encoded())
             } catch {
                 emitError("Could not encode the annotation: \(error.localizedDescription)")
-                overlay.resume()
+                overlay.hide(reason: "encoding-failed")
                 return
             }
             emit([

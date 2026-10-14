@@ -121,7 +121,6 @@ import AnnotatorCore
         case "show-comment": panels?.showComment(value)
         case "hide-comment": panels?.hideComment()
         case "comment-cancel": cancelDictation(); panels?.hideComment()
-        case "comment-finish": Task { await submit(moving: true) }
         case "register-hotkey": hotkeys?.register(value)
         case "unregister-hotkey": hotkeys?.unregister(value.int)
         case "quit": NSApp.terminate(nil)
@@ -140,17 +139,15 @@ import AnnotatorCore
     }
     func startDictation() { voice.start() }
     func finishDictation() async throws { try await voice.finish() }
-    func submit(moving: Bool = false) async {
+    func submit() async {
         guard !commentBusy else { return }; commentBusy = true; defer { commentBusy = false }
         do {
             try await finishDictation()
-            if moving { _ = try await call("comment_finish_done", ["submit": .bool(!comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), "text": .string(comment), "keep": .bool(false)]) }
-            else { _ = try await call("submit_comment", ["text": .string(comment)]) }
+            _ = try await call("submit_comment", ["text": .string(comment)])
         } catch is CancellationError {
             releaseOverlay(); return
         } catch {
             commentError = error.localizedDescription
-            if moving { act("comment_finish_done", ["submit": .bool(false), "text": .string(comment), "keep": .bool(true)]) }
         }
     }
 }

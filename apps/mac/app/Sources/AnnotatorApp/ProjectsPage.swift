@@ -113,8 +113,8 @@ private struct ProjectDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 KitGroup("Annotations") {
-                    KitFieldRow("Open", value: "\(annotations.filter { ["todo", "in_progress"].contains($0["status"].string) }.count)", copyable: false)
-                    KitFieldRow("Finished", value: "\(annotations.filter { $0["status"].string == "done" }.count)", copyable: false)
+                    KitFieldRow("Open", value: "\(annotations.filter { AnnotationCollection.isOpen($0) }.count)", copyable: false)
+                    KitFieldRow("Finished", value: "\(annotations.filter { !AnnotationCollection.isOpen($0) }.count)", copyable: false)
                     KitActionRow("View annotations (\(annotations.count))", icon: .allItems) { model.navigate("project:" + project["id"].string) }
                 }
                 KitGroup("Project") {

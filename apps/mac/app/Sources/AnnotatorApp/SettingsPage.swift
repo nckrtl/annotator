@@ -6,8 +6,7 @@ import AnnotatorCore
 struct SettingsPage: View {
     @Bindable var model: AppModel
     @State private var saved = false
-    @State private var recording = false
-    @State private var monitor: Any?
+    @State private var recorder = ShortcutRecorder()
     @State private var section = "general"
     var body: some View {
         ScrollView {
@@ -27,7 +26,7 @@ struct SettingsPage: View {
                     }
                     KitGroup("Capture", footer: "Press the shortcut to select an element. Hold Option and drag to select a region. Escape cancels.") {
                         KitRow("Global shortcut", detail: model.state["hotkeyError"].string.nilIfEmpty) {
-                            Button(recording ? "Press a shortcut…" : model.state["hotkey"]["display"].string) { startRecording() }.buttonStyle(.kit)
+                            Button(recorder.recording ? "Press a shortcut…" : model.state["hotkey"]["display"].string) { startRecording() }.buttonStyle(.kit)
                         }
                         KitRow("Permissions", detail: "Accessibility and Screen Recording") { Button("Review…") { model.panels?.permissions() }.buttonStyle(.kit) }
                     }
@@ -52,29 +51,21 @@ struct SettingsPage: View {
                 }
             }
         }
-        .onDisappear { stopRecording() }
+        .onDisappear { recorder.stop() }
+        .onChange(of: section) { recorder.stop() }
         .onReceive(NotificationCenter.default.publisher(for: .demoSettingsSection)) { section = $0.object as? String ?? "general" }
     }
     private func text(_ key: String) -> Binding<String> { Binding(get: { model.settings[key].string }, set: { model.settings[key] = .string($0) }) }
     private func toggle(_ key: String) -> Binding<Bool> { Binding(get: { model.settings[key].bool }, set: { model.settings[key] = .bool($0) }) }
     private func startRecording() {
-        guard !recording else { stopRecording(); return }; recording = true
-        model.act("hotkey_recording", ["recording": .bool(true)])
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            MainActor.assumeIsolated {
-                if event.keyCode != 53 {
-                    let flags = event.modifierFlags
-                    guard !flags.intersection([.command, .control, .option]).isEmpty else { return }
-                    let modifiers = (flags.contains(.command) ? 256 : 0) | (flags.contains(.shift) ? 512 : 0) | (flags.contains(.option) ? 2048 : 0) | (flags.contains(.control) ? 4096 : 0)
-                    model.settings["hotkey"] = .object(["keyCode": .number(Double(event.keyCode)), "modifiers": .number(Double(modifiers))])
-                    Task { await model.saveSettings() }
-                }
-                stopRecording()
-            }
-            return nil
-        }
+        if recorder.recording { recorder.stop(); return }
+        recorder.start(changed: { recording in
+            model.act("hotkey_recording", ["recording": .bool(recording)])
+        }, selected: { keyCode, modifiers in
+            model.settings["hotkey"] = .object(["keyCode": .number(Double(keyCode)), "modifiers": .number(Double(modifiers))])
+            Task { await model.saveSettings() }
+        })
     }
-    private func stopRecording() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil; if recording { model.act("hotkey_recording", ["recording": .bool(false)]) }; recording = false }
 }
 extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
 extension Notification.Name { static let demoSettingsSection = Notification.Name("demo-settings-section") }

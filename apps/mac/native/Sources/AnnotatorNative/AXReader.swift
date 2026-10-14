@@ -7,7 +7,7 @@ import ApplicationServices
 final class AXReader: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.nckrtl.annotator.ax", qos: .userInteractive)
     /// Electron apps that already got `AXManualAccessibility`. Touched only on `queue`.
-    private var manualAccessibility = Set<pid_t>()
+    private var manualAccessibility: [pid_t: Date] = [:]
 
     init() {
         // Applies to every element: a hung app costs at most 0.25 s per call.
@@ -18,9 +18,31 @@ final class AXReader: @unchecked Sendable {
     /// Nil when no app window is under the point.
     /// `text` walks children for a name. Hover leaves it off so a slow tree cannot stall the highlight.
     func target(at point: CGPoint, text: Bool = true) async -> Target? {
-        await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: self.readTarget(at: point, text: text)) }
+        await Self.waitForWebArea(text: text) {
+            await withCheckedContinuation { continuation in
+                self.queue.async {
+                    let target = self.readTarget(at: point, text: text)
+                    let warming = target.flatMap { self.manualAccessibility[$0.app.pid] }
+                        .map { Date().timeIntervalSince($0) < 1 } ?? false
+                    continuation.resume(returning: (target, warming))
+                }
+            }
         }
+    }
+
+    static func waitForWebArea(text: Bool, read: @Sendable () async -> (Target?, Bool)) async -> Target? {
+        // Electron builds its tree asynchronously. Only selection waits, and only
+        // during the first second after a successful accessibility request.
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(350))
+        for attempt in 0..<8 {
+            let (target, warming) = await read()
+            if !text || !warming || target?.webArea != nil || attempt == 7 || ContinuousClock.now >= deadline {
+                return target
+            }
+            do { try await Task.sleep(for: .milliseconds(50)) }
+            catch { return target }
+        }
+        return nil
     }
 
     /// The app window under `point`, for region annotations.
@@ -148,11 +170,12 @@ final class AXReader: @unchecked Sendable {
     /// Electron apps expose an empty tree until a client asks for it. Ask once per process.
     /// Do not set `AXEnhancedUserInterface`: it breaks window animations in some apps.
     private func enableElectronAccessibility(_ app: AXUIElement, pid: pid_t, bundleURL: URL?) {
-        guard !manualAccessibility.contains(pid), let bundleURL else { return }
+        guard manualAccessibility[pid] == nil, let bundleURL else { return }
         let framework = bundleURL.appending(path: "Contents/Frameworks/Electron Framework.framework")
         guard FileManager.default.fileExists(atPath: framework.path) else { return }
-        manualAccessibility.insert(pid)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        if AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
+            manualAccessibility[pid] = Date()
+        }
     }
 
     private func info(_ element: AXUIElement) -> AXElementInfo {

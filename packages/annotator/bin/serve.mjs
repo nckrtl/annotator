@@ -17,7 +17,7 @@ const usage = `Usage:
 
 serve runs in the foreground. Default: 127.0.0.1, a random port and a new temporary store.
 --host without an IP binds to 0.0.0.0, so other machines can reach the server.
---allow-origin ORIGIN restricts browser access; repeat for each allowed origin.
+--allow-origin ORIGIN allows cross-origin browser access; repeat for each allowed origin.
 --state writes the server's PID, port and URL to FILE while it runs.
 start runs serve in the background; stop and status use the same state file.
 start, stop and status print JSON.`;
@@ -112,7 +112,9 @@ try {
         const notify = () => {
             const records = store.list();
             const present = new Set(records.map((a) => a.id));
-            const removed = [...knownAnnotations.values()].filter((a) => !present.has(a.id));
+            const removed = [...knownAnnotations.values()].filter(
+                (a) => !present.has(a.id) && !store.unreadableIds.has(a.id),
+            );
             store.rememberDeleted(removed.map((a) => a.id));
             for (const annotation of removed) {
                 logActivity(annotation, "deleted");
@@ -150,6 +152,23 @@ try {
                 response.end(JSON.stringify(body));
             };
             try {
+                // Reject DNS rebinding before serving any endpoint. Proxies must send
+                // the upstream Host, including its port.
+                const localHosts = ["127.0.0.1", "localhost", "[::1]"];
+                if (!["127.0.0.1", "::1"].includes(host)) {
+                    localHosts.push(isIP(host) === 6 ? `[${host}]` : host);
+                    localHosts.push(isIP(publicHost) === 6 ? `[${publicHost}]` : publicHost);
+                }
+                const authority = request.headers.host;
+                const listenPort = server.address().port;
+                if (
+                    !localHosts.some(
+                        (name) =>
+                            authority === `${name}:${listenPort}` ||
+                            (listenPort === 80 && authority === name),
+                    )
+                )
+                    return json(403, { error: "Host not allowed" });
                 const url = new URL(request.url, "http://localhost");
                 const path = url.pathname;
                 if (
@@ -166,18 +185,22 @@ try {
                 )
                     return json(404, { error: "Not found" });
                 const origin = request.headers.origin;
-                if (allowedOrigins.size) {
-                    response.setHeader("Vary", "Origin");
-                    if (origin && !allowedOrigins.has(origin))
-                        return json(403, { error: "Origin not allowed" });
-                    if (origin) response.setHeader("Access-Control-Allow-Origin", origin);
-                } else response.setHeader("Access-Control-Allow-Origin", "*");
+                response.setHeader("Vary", "Origin");
+                if (origin && origin !== `http://${authority}` && !allowedOrigins.has(origin))
+                    return json(403, {
+                        error: "Origin not allowed. Start with --allow-origin ORIGIN or use the Vite proxy.",
+                    });
+                if (!origin && request.headers["sec-fetch-site"] === "cross-site")
+                    return json(403, { error: "Cross-site browser request not allowed" });
+                if (origin) {
+                    response.setHeader("Access-Control-Allow-Origin", origin);
+                    response.setHeader("Access-Control-Allow-Private-Network", "true");
+                }
                 response.setHeader(
                     "Access-Control-Allow-Methods",
                     "GET, HEAD, POST, DELETE, OPTIONS",
                 );
                 response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-                response.setHeader("Access-Control-Allow-Private-Network", "true");
                 if (request.method === "OPTIONS") {
                     response.writeHead(204);
                     return response.end();
@@ -185,7 +208,8 @@ try {
                 if (path === "/health" || path === "/inject.js") {
                     if (!["GET", "HEAD"].includes(request.method))
                         return json(405, { error: "Method not allowed" });
-                    if (path === "/health") return json(200, { ok: true });
+                    if (path === "/health")
+                        return json(200, { ok: true, service: "@nckrtl/annotator" });
                     const script = readFileSync(new URL("../dist/inject.js", import.meta.url));
                     response.writeHead(200, {
                         "Content-Type": "text/javascript; charset=utf-8",
@@ -256,12 +280,15 @@ try {
                     return json(200, { data: { removedIds: removed.map((a) => a.id) } });
                 }
                 if (request.method !== "POST") return json(405, { error: "Method not allowed" });
-                let raw = "";
+                const chunks = [];
+                let bytes = 0;
                 for await (const chunk of request) {
-                    raw += chunk;
-                    if (Buffer.byteLength(raw) > 10 * 1024 * 1024)
+                    bytes += chunk.length;
+                    if (bytes > 10 * 1024 * 1024)
                         return json(413, { error: "Annotation exceeds 10 MiB" });
+                    chunks.push(chunk);
                 }
+                const raw = Buffer.concat(chunks, bytes).toString("utf8");
                 let body;
                 try {
                     body = raw.trim() ? JSON.parse(raw) : {};

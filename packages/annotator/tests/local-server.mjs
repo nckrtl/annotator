@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, readdir, writeFile, rename } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
+import { request } from "node:http";
 const dir = await mkdtemp(join(tmpdir(), "annotate-test-"));
 const children = [];
 async function start(extra = []) {
@@ -46,6 +47,45 @@ try {
     const file = join(dir, "store");
     const first = await start(["--host", "127.0.0.1", "--store", file]);
     const second = await start(["--store", join(dir, "second")]);
+    // Reject all cross-origin reads and writes by default, including private-network preflights.
+    for (const path of ["/annotations", "/annotations/events", "/health", "/inject.js", "/skill"]) {
+        for (const method of ["GET", "POST", "DELETE", "OPTIONS"]) {
+            const response = await fetch(new URL(path, first.url), {
+                method,
+                headers: {
+                    Origin: "https://evil.example",
+                    "Access-Control-Request-Private-Network": "true",
+                },
+            });
+            assert.equal(response.status, 403);
+            assert.equal(response.headers.get("access-control-allow-origin"), null);
+            assert.equal(response.headers.get("access-control-allow-private-network"), null);
+        }
+    }
+    for (const host of [
+        "evil.example",
+        `evil.example:${new URL(first.url).port}`,
+        "localhost:1",
+        "127.0.0.1.evil.example",
+    ]) {
+        const code = await new Promise((resolve, reject) => {
+            const req = request(
+                new URL("/health", first.url),
+                { headers: { Host: host } },
+                (res) => {
+                    res.resume();
+                    resolve(res.statusCode);
+                },
+            );
+            req.on("error", reject);
+            req.end();
+        });
+        assert.equal(code, 403, host);
+    }
+    const sameOrigin = new URL(first.url).origin;
+    const allowed = await fetch(first.url, { headers: { Origin: sameOrigin } });
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), sameOrigin);
     const restricted = await start([
         "--allow-origin",
         "https://app.example",
@@ -76,13 +116,67 @@ try {
     }
     assert.equal((await fetch(restricted.url)).status, 200);
     const healthUrl = new URL("/health", restricted.url);
-    assert.equal((await fetch(healthUrl)).status, 200);
+    assert.deepEqual(await (await fetch(healthUrl)).json(), {
+        ok: true,
+        service: "@nckrtl/annotator",
+    });
     // Corrupt the store: health must not list or otherwise read records.
     const restrictedStore = restricted.output().match(/Store: (.+)/)[1];
     await writeFile(join(restrictedStore, "todo", "broken.json"), "not json");
     assert.equal((await fetch(healthUrl)).status, 200);
-    assert.equal((await fetch(restricted.url)).status, 500);
+    assert.equal((await fetch(restricted.url)).status, 200);
     await rm(join(restrictedStore, "todo", "broken.json"));
+    const preserved = (
+        await (await post(restricted.url, { id: "repair", comment: "Keep this record" })).json()
+    ).data;
+    const repairFile = join(restrictedStore, "todo", "repair.json");
+    await writeFile(repairFile, "{partial");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const partial = await (await fetch(restricted.url)).json();
+    assert.deepEqual(partial.data, []);
+    assert.ok(!partial.meta.deletedIds.includes("repair"), "An unreadable file is not a deletion");
+    assert.equal(
+        await readFile(repairFile, "utf8"),
+        "{partial",
+        "Keep the original file for repair",
+    );
+    assert.equal(
+        (await post(restricted.url, { id: "repair", comment: "Must not overwrite it" })).status,
+        500,
+    );
+    await writeFile(repairFile, JSON.stringify(preserved));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal((await (await fetch(restricted.url)).json()).data[0].comment, "Keep this record");
+    await fetch(restricted.url, { method: "DELETE" });
+    const unicode = Buffer.from(JSON.stringify({ id: "unicode", comment: "Align ⌃⌥A café 🎙" }));
+    const chunked = await new Promise((resolve, reject) => {
+        const req = request(
+            restricted.url,
+            { method: "POST", headers: { "Content-Type": "application/json" } },
+            (res) => {
+                const chunks = [];
+                res.on("data", (chunk) => chunks.push(chunk));
+                res.on("end", () =>
+                    resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks)) }),
+                );
+            },
+        );
+        req.on("error", reject);
+        void (async () => {
+            for (const byte of unicode) {
+                req.write(Buffer.from([byte]));
+                await new Promise((done) => setTimeout(done, 1));
+            }
+            req.end();
+        })();
+    });
+    assert.equal(chunked.status, 201);
+    assert.equal(chunked.body.data.comment, "Align ⌃⌥A café 🎙");
+    assert.equal(
+        (await fetch(restricted.url, { method: "POST", body: "x".repeat(10 * 1024 * 1024 + 1) }))
+            .status,
+        413,
+    );
     const inject = await fetch(new URL("/inject.js", first.url));
     assert.equal(inject.status, 200);
     assert.match(inject.headers.get("content-type"), /javascript/);
@@ -157,8 +251,8 @@ try {
         method: "OPTIONS",
         headers: { Origin: "https://preview.example", "Access-Control-Request-Method": "POST" },
     });
-    assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+    assert.equal(preflight.status, 403);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), null);
     assert.equal((await post(first.url, {})).status, 422);
     assert.equal((await fetch(first.url, { method: "POST", body: "{" })).status, 400);
     const created = await post(first.url, { id: "one", comment: "Change button", pathname: "/" });
