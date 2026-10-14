@@ -169,7 +169,7 @@ is part of the existing API and keeps its name.
 waits for paste dispatch (200), no dictation/focus change (409), or silence (422).
 `POST /dictate/cancel` cancels. `/status` carries `status`, `cancelledAt` (epoch
 milliseconds), and `error`; an HTTP 200 status can still report a worker error.
-The native contract is in `~/apps/ofide/mac/app/Core/Sources/OperatorCore/Control`.
+The native contract is in `~/apps/operator/mac/app/Core/Sources/OperatorCore/Control`.
 
 The helper removes its full-screen panels at selection, before capture starts.
 The comment uses an activating key panel. Before start and stop, verify that
