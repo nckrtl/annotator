@@ -33,8 +33,7 @@ import AnnotatorCore
                 guard generation == commentGeneration else { return }
                 guard origin.array.count == 2 else { throw BridgeError("The comment panel could not be placed.") }
                 panel.setFrameOrigin(NSPoint(x: origin.array[0].double, y: origin.array[1].double))
-                panel.makeKeyAndOrderFront(nil); NSApp.activate()
-                NotificationCenter.default.post(name: .focusComment, object: nil)
+                focusComment()
                 if model.target["dictation"]["autoStart"].bool && !model.demo {
                     try? await Task.sleep(for: .milliseconds(200))
                     if generation == commentGeneration { model.startDictation() }
@@ -68,7 +67,7 @@ import AnnotatorCore
         panel.contentView = NSHostingView(rootView: CommentView(model: model).kitAppearance())
         commentPanel = panel; return panel
     }
-    func focusComment() { NSApp.activate(ignoringOtherApps: true); commentPanel?.makeKeyAndOrderFront(nil); NotificationCenter.default.post(name: .focusComment, object: nil) }
+    func focusComment() { model.hideLibraryForAnnotation(); NSApp.activate(ignoringOtherApps: true); commentPanel?.makeKeyAndOrderFront(nil); NotificationCenter.default.post(name: .focusComment, object: nil) }
 }
 final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true }; override var canBecomeMain: Bool { false } }
 extension Notification.Name { static let focusComment = Notification.Name("focus-comment") }

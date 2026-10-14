@@ -46,6 +46,7 @@ import ScreenCaptureKit
     #if DEBUG
     static func capture(_ model: AppModel, directory: String) async {
         guard model.demo else { return }
+        model.navigate("all")
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         try? await Task.sleep(for: .seconds(2))
         guard let window = model.window else { fputs("No demo window\n", stderr); exit(1) }

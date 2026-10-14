@@ -4,7 +4,13 @@ import AnnotatorCore
 
 @MainActor @Observable final class AppModel {
     static let shared = AppModel()
-    var state: JSON = .object([:])
+    var state: JSON = .object([:]) {
+        didSet {
+            if isAnnotating && !(oldValue["annotating"].bool || oldValue["commentOpen"].bool) {
+                hideLibraryForAnnotation()
+            }
+        }
+    }
     var settings: JSON = .object([:])
     var projects: [JSON] = []
     var projectsError = ""
@@ -85,6 +91,11 @@ import AnnotatorCore
     func act(_ command: String, _ args: [String: JSON] = [:]) {
         Task { do { _ = try await call(command, args) } catch { self.error = error.localizedDescription } }
     }
+    /// Activation for the comment field must not also reveal the library.
+    func hideLibraryForAnnotation() {
+        window?.orderOut(nil)
+        panels?.menu?.orderOut(nil)
+    }
     func navigate(_ page: String, id: String? = nil) {
         self.page = page; search = ""; searching = false
         if let id { selected = id }
@@ -106,7 +117,7 @@ import AnnotatorCore
             DictationLog.write("overlay-release core-stopped")
             error = value.string
         case "hide-menu": panels?.menu?.orderOut(nil)
-        case "comment-opened": voice.cancel(); target = value; comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
+        case "comment-opened": hideLibraryForAnnotation(); voice.cancel(); target = value; comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
         case "show-comment": panels?.showComment(value)
         case "hide-comment": panels?.hideComment()
         case "comment-cancel": cancelDictation(); panels?.hideComment()

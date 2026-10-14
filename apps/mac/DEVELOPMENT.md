@@ -139,3 +139,15 @@ selections and `KitHeaderSearchField` for active searches. Keep `KitPicker` for
 form rows. This requires DesignKit `34f2f5d` or a descendant; merge its
 `glass-header-picker` branch before this app's `glass-headers` branch.
 See [the header sweep](docs/glass-headers-verification.md) for coverage and checks.
+
+## Library window during capture
+
+The library stays hidden on launch and when capture starts. Comment and dictation
+focus must hide it before activating Annotator. A reopen request during capture or
+an open comment must leave it hidden. Explicit library/settings navigation still
+opens it; finishing or cancelling a comment does not restore it.
+
+Run `scripts/check-windows.sh` to check the real window lifecycle in light and dark
+with demo data. It verifies the frontmost app and editable key comment field,
+without starting the core or annotation server. Its comment images are offscreen
+renders; the window visibility and focus assertions use real AppKit windows.
