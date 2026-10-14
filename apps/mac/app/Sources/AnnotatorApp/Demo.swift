@@ -55,10 +55,19 @@ import ScreenCaptureKit
             window.appearance = NSApp.appearance
             populate(model); model.page = "all"
             await shot(window, "\(appearance)-01-library", directory)
+            model.page = "open"
+            await shot(window, "\(appearance)-35-open", directory)
+            model.page = "all"
+            window.setContentSize(Kit.windowMinSize)
+            await shot(window, "\(appearance)-36-library-minimum", directory)
+            window.setContentSize(NSSize(width: 1000, height: 680))
             model.selected = ""
             await shot(window, "\(appearance)-02-empty-detail", directory)
             model.searching = true; model.search = "missing"
             await shot(window, "\(appearance)-03-search-empty", directory)
+            window.setContentSize(Kit.windowMinSize)
+            await shot(window, "\(appearance)-37-search-minimum", directory)
+            window.setContentSize(NSSize(width: 1000, height: 680))
             model.searching = false; model.search = ""; model.page = "done"; model.selected = "demo-212"
             await shot(window, "\(appearance)-04-finished", directory)
             model.page = "all"; model.selected = "demo-215"; model.state["health"] = .object(["tone": .string("error"), "title": .string("Server unreachable. Your comments are saved for retry.")])
@@ -78,7 +87,16 @@ import ScreenCaptureKit
             model.navigate("project:website", id: "demo-215")
             precondition(model.filtered.count == 3 && model.selectedProjectID == "website")
             await shot(window, "\(appearance)-30-project-annotations", directory)
+            window.setContentSize(Kit.windowMinSize)
+            await shot(window, "\(appearance)-38-filtered-minimum", directory)
+            model.searching = true
+            await shot(window, "\(appearance)-39-filtered-search-minimum", directory)
+            model.searching = false
+            window.setContentSize(NSSize(width: 1000, height: 680))
             model.navigate("projects")
+            model.searching = true
+            await shot(window, "\(appearance)-40-project-search", directory)
+            model.searching = false
             model.selectedProjectID = "docs"
             await shot(window, "\(appearance)-31-project-zero-counts", directory)
             model.selectedProjectID = "website"
@@ -124,6 +142,10 @@ import ScreenCaptureKit
             model.page = "settings"; NotificationCenter.default.post(name: .demoSettingsSection, object: "general")
             window.setContentSize(Kit.windowMinSize)
             await shot(window, "\(appearance)-19-minimum-size", directory)
+            NotificationCenter.default.post(name: .demoSettingsSection, object: "dictation")
+            await shot(window, "\(appearance)-41-dictation-minimum", directory)
+            NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
+            await shot(window, "\(appearance)-42-conn-minimum", directory)
             window.setContentSize(NSSize(width: 1000, height: 680))
             let raw = screenshot.split(separator: ",", maxSplits: 1)[1]
             let image = NSImage(data: Data(base64Encoded: String(raw))!)!

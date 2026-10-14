@@ -66,7 +66,7 @@ struct ProjectsPage: View {
             }
             .kitTopBar {
                 HStack(spacing: 8) {
-                    if model.searching { KitSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
+                    if model.searching { KitHeaderSearchField(text: $model.search, onClose: { model.search = ""; model.searching = false }) }
                     else { Text("Projects").font(.kitTitle); Spacer() }
                     KitToolbarGroup {
                         if !model.searching { KitToolbarButton(icon: .search, help: "Search projects (⌘F)") { model.searching = true } }

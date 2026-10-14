@@ -126,3 +126,12 @@ focus, or real paste. Label these captures as offscreen renders in any handoff.
 fixture mode for a locked or modal desktop. It explicitly skips activation checks
 but still exercises the real text view's typing, paste, error and Escape paths.
 A successful focus run must omit this flag.
+
+## Glass headers
+
+Every app-owned header control uses DesignKit Liquid Glass, including sidebar
+and popup actions. Use `KitToolbarPicker` inside `KitToolbarGroup` for header
+selections and `KitHeaderSearchField` for active searches. Keep `KitPicker` for
+form rows. This requires DesignKit `34f2f5d` or a descendant; merge its
+`glass-header-picker` branch before this app's `glass-headers` branch.
+See [the header sweep](docs/glass-headers-verification.md) for coverage and checks.

@@ -85,7 +85,7 @@ struct CommentView: View {
                     Text(model.target["label"].string).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1).help(model.target["label"].string)
                 }
                 Spacer()
-                KitIconButton(.close, help: "Cancel comment") { model.cancelComment() }.keyboardShortcut(.cancelAction)
+                KitToolbarGroup { KitToolbarButton(icon: .close, help: "Cancel comment") { model.cancelComment() }.keyboardShortcut(.cancelAction) }
             }
             if model.target["mode"].string == "window" { Text("Window selection · no accessible element found").font(.kitDetail).foregroundStyle(.secondary) }
             CommentEditor(text: $model.comment, submit: { Task { await model.submit() } }, cancel: { model.cancelComment() })
@@ -151,7 +151,7 @@ struct MenuPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitIconButton(.settings, help: "Settings") { model.navigate("settings") }.accessibilityLabel("Settings") }
+                HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitToolbarGroup { KitToolbarButton(icon: .settings, help: "Settings") { model.navigate("settings") }.accessibilityLabel("Settings") } }
                 Button { model.act("toggle_annotating") } label: { HStack { Text(model.isAnnotating ? "Stop annotating" : "Annotate screen"); Spacer(); KitKeyCap(model.state["hotkey"]["display"].string) } }.buttonStyle(.kitPrimary)
                 if model.state["health"]["tone"].string == "error" { KitGroup { KitNotice(model.state["health"]["title"].string, tone: .error) } }
                 KitGroup("Recent annotations") {
