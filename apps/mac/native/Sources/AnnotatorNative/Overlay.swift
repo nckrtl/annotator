@@ -226,8 +226,8 @@ final class OverlayPanel: NSPanel {
         self.controller = controller
         super.init(
             contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        // Above the menu bar (24), below the comment panel.
-        level = .statusBar
+        // Above open menus (101), like the system screenshot tool, and below the comment panel.
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.screenSaverWindow)) + 1)
         isOpaque = false
         // A faint tint shows that annotate mode is on, and makes every pixel take clicks.
         backgroundColor = NSColor.black.withAlphaComponent(0.03)

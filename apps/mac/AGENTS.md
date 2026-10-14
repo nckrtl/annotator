@@ -44,14 +44,16 @@ helper. Read this file before you change it.
 1. **Toggle.** A global hotkey (default ⌃⌥A, configurable) or the menu bar
    item turns annotate mode on and off. Esc turns it off.
 2. **Overlay.** In annotate mode, one borderless transparent `NSPanel` per
-   screen covers the display above normal windows. It takes mouse events, so
+   screen covers the display above everything, open menus included, like the
+   system screenshot tool. It takes mouse events, so
    clicks do not reach the app underneath. It draws a highlight rectangle
    around the hovered element and a small label: app name, role and title.
 3. **Hit test.** On mouse move, find the element under the cursor:
    - Use `CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID)` to
      get the topmost on-screen window at the point, skipping this app's own
      windows (match `kCGWindowOwnerPID` against our pid) and windows at
-     layer > 0 that are not app content (menu bar, Dock, overlays).
+     system layers that are not content (Dock, overlays). Open menus, the menu
+     bar and status menus count, so they can be annotated.
    - Create `AXUIElementCreateApplication(pid)` for that window's owner and
      call `AXUIElementCopyElementAtPosition(appElement, x, y)`. Do not use the
      system-wide element: our own overlay is on top and would be hit.

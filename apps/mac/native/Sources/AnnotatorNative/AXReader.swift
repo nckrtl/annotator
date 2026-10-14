@@ -34,14 +34,19 @@ final class AXReader: @unchecked Sendable {
 
     // MARK: - Windows
 
+    private static let menuLayers: Set<Int> = [
+        Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow)),
+        Int(CGWindowLevelForKey(.popUpMenuWindow)),
+    ]
+
     private struct FoundWindow {
         var app: AppInfo
         var window: WindowInfo
         var bundleURL: URL?
     }
 
-    /// The topmost window at `point`. Skips the helper's and Annotator's windows and system layers
-    /// (Dock at 20, menu bar at 24, status items at 25 and above).
+    /// The topmost window at `point`. Skips the helper's and Annotator's windows and system layers.
+    /// App windows (below 20), the menu bar (24), status items (25) and open menus (101) count.
     private func topWindow(at point: CGPoint) -> FoundWindow? {
         guard
             let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -50,7 +55,7 @@ final class AXReader: @unchecked Sendable {
         for info in list {
             guard
                 let pid = info[kCGWindowOwnerPID as String] as? pid_t, !ourPids.contains(pid),
-                let layer = info[kCGWindowLayer as String] as? Int, (0..<20).contains(layer),
+                let layer = info[kCGWindowLayer as String] as? Int, (0..<20).contains(layer) || AXReader.menuLayers.contains(layer),
                 (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                 let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
                 let bounds = CGRect(dictionaryRepresentation: boundsInfo), bounds.contains(point),
