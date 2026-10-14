@@ -11,13 +11,11 @@ import ScreenCaptureKit
         do {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             try await Task.sleep(for: .seconds(1))
-            for active in [false, true] {
-                let icon = StatusIcon.image(annotating: active)
-                precondition(icon.isTemplate && icon.size == NSSize(width: 18, height: 18))
-            }
+
             for appearance in ["light", "dark"] {
                 NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
                 Demo.populate(model)
+                try await statusItemShots(model, appearance: appearance, directory: directory)
                 let host = NSHostingView(rootView: MenuPanel(model: model).kitAppearance())
                 let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
@@ -72,6 +70,26 @@ import ScreenCaptureKit
             print("PASS menu checks")
         } catch { fatalError("Menu check: \(error)") }
         NSApp.terminate(nil)
+    }
+    /// The system hosts status items outside the app's capturable window list. Capture the
+    /// actual status-item view, including its queue count, at 2x in each native appearance.
+    static func statusItemShots(_ model: AppModel, appearance: String, directory: String) async throws {
+        guard let window = NSApp.windows.first(where: { String(describing: type(of: $0)) == "NSStatusBarWindow" }),
+              let view = window.contentView else { throw NSError(domain: "MenuCheck", code: 1, userInfo: [NSLocalizedDescriptionKey: "No status-item view"]) }
+        window.appearance = NSApp.appearance
+        for active in [false, true] {
+            model.state["annotating"] = .bool(active)
+            try await settle()
+            view.layoutSubtreeIfNeeded()
+            let bounds = view.bounds
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw NSError(domain: "MenuCheck", code: 2) }
+            bitmap.size = bounds.size
+            view.cacheDisplay(in: bounds, to: bitmap)
+            let name = "\(appearance)-menu-bar-\(active ? "annotating" : "idle").png"
+            try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory + "/" + name))
+            print("PASS \(appearance) menu-bar \(active ? "annotating" : "idle") view captured with queue count")
+        }
+        model.state["annotating"] = .bool(false)
     }
     static func scrollToBottom(_ view: NSView) {
         if let scroll = view as? NSScrollView, let document = scroll.documentView {

@@ -28,7 +28,7 @@ import DesignKit
                 .background(WindowOpener(model: model))
                 .onAppear { model.act("menu_opened") }
         } label: {
-            Image(nsImage: StatusIcon.image(annotating: model.state["annotating"].bool))
+            Image(systemName: model.state["annotating"].bool ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
                 .accessibilityLabel(model.state["annotating"].bool ? "Annotator: annotating" : "Annotator")
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
             if count > 0 { Text("\(count)") }

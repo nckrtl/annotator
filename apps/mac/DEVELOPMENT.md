@@ -40,9 +40,12 @@ capture of other apps need a signed, permission-granted app.
 ## Neutral appearance
 
 `bash scripts/check-menu.sh [absolute-output-directory]` checks the menu's own
-fitting size, its empty and overflowing states, the status image's template flag
-and size, and navigation after closing the main window. It captures light and dark
-windows at 2× with demo data. It calls navigation directly; it does not replace
+fitting size, its empty and overflowing states, and navigation after closing the
+main window. It captures light and dark
+windows at 2× with demo data. It also captures the actual menu-bar item view,
+including the count, in idle and annotating states in both appearances. These are
+transparent crops of the system-hosted item, not full desktop captures.
+It calls navigation directly; it does not replace
 clicking the real status item and its actions. The older snapshot runner supplies
 a fixed window size and cannot detect a collapsed menu-bar dropdown.
 
@@ -85,3 +88,7 @@ To keep verification builds under the ignored build folder, use Swift's
 `--scratch-path build/swift-app` (or `build/swift-native`) and
 `CARGO_TARGET_DIR="$PWD/build/rust"`. The smoke test accepts that Cargo target path;
 set `TMPDIR` to a directory under `build` for its isolated fixtures.
+
+The menu-bar label uses `pencil.tip.crop.circle` when idle and
+`pencil.tip.crop.circle.fill` while annotating, with the open queue count beside it.
+These native SF Symbols are Nick's requested exception to Heroicons in the app UI.
