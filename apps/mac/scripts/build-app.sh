@@ -21,7 +21,11 @@ mkdir -p "$built/Contents/MacOS" "$built/Contents/Resources"
 bin=$(swift build --package-path app --scratch-path build/swift-app -c "$configuration" --show-bin-path)
 cp "$bin/Annotator" "$built/Contents/MacOS/Annotator"
 cp build/rust/"$configuration"/annotator "$built/Contents/Resources/annotator-core"
-cp build/helpers/annotator-native "$built/Contents/Resources/annotator-native"
+helper="$built/Contents/Helpers/AnnotatorNative.app"
+mkdir -p "$helper/Contents/MacOS"
+cp native/Helper-Info.plist "$helper/Contents/Info.plist"
+cp build/helpers/annotator-native "$helper/Contents/MacOS/annotator-native"
+rm -f "$built/Contents/Resources/annotator-native"
 cp src-tauri/icons/icon.icns "$built/Contents/Resources/Annotator.icns"
 # SwiftPM's Xcode build backend emits resource bundles beside the executable.
 for bundle in "$bin"/*.bundle; do
@@ -33,8 +37,10 @@ if [[ $configuration == release ]]; then
   bash scripts/sign-app.sh "$built"
 else
   codesign --force --sign - --identifier com.nckrtl.annotator.core "$built/Contents/Resources/annotator-core"
-  codesign --force --sign - --identifier com.nckrtl.annotator.native "$built/Contents/Resources/annotator-native"
+  codesign --force --sign - --identifier com.nckrtl.annotator.native "$helper"
   codesign --force --sign - "$built"
   codesign --verify --deep --strict "$built"
 fi
 printf 'Built %s\n' "$built"
+
+bash scripts/check-bundle.sh "$built"

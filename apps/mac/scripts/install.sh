@@ -4,10 +4,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bash scripts/build-app.sh
 built=build/release/Annotator.app
-osascript -e 'quit app id "com.nckrtl.annotator"' 2>/dev/null || true
-pkill -x Annotator 2>/dev/null || true
-pkill -f '/Annotator.app/Contents/MacOS/annotator$' 2>/dev/null || true
-sleep 1
+# AppKit targets only the installed host executable, even on the old helper layout.
+for executable in Annotator annotator; do
+  pids=$(osascript -l JavaScript scripts/quit-installed-app.js \
+    "/Applications/Annotator.app/Contents/MacOS/$executable")
+  for pid in $pids; do
+    for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Annotator PID $pid did not quit; keeping the installed app." >&2
+      exit 1
+    fi
+  done
+done
 rm -rf /Applications/Annotator.app
 ditto "$built" /Applications/Annotator.app
 codesign --verify --deep --strict /Applications/Annotator.app
