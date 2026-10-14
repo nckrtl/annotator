@@ -2,16 +2,6 @@ import SwiftUI
 import DesignKit
 import AnnotatorCore
 
-struct AnnotatorMark: View {
-    var size: CGFloat = 34
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.28).fill(Color.kitInk)
-            KitIconImage(.edit, size: size * 0.52).foregroundStyle(Color.kitOnInk)
-            Circle().fill(Color.kitOnInk).frame(width: size * 0.12, height: size * 0.12).offset(x: -size * 0.22, y: size * 0.22)
-        }.frame(width: size, height: size).accessibilityLabel("Annotator")
-    }
-}
 struct MainWindow: View {
     @Bindable var model: AppModel
     var body: some View {
