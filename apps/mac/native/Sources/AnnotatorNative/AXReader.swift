@@ -177,16 +177,16 @@ final class AXReader: @unchecked Sendable {
         return targets
     }
 
-    private static let mappedAttributes = [
+    private static let mappedAttributes: [String] = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXRoleDescriptionAttribute, kAXTitleAttribute,
         kAXDescriptionAttribute, kAXIdentifierAttribute, kAXValueAttribute, kAXHelpAttribute,
         kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
-    ] as CFArray
+    ]
 
     /// One element's details, frame and children in a single accessibility call.
     private func read(_ element: AXUIElement) -> (info: AXElementInfo, frame: CGRect?, children: [AXUIElement]) {
         var raw: CFArray?
-        guard AXUIElementCopyMultipleAttributeValues(element, Self.mappedAttributes, [], &raw) == .success,
+        guard AXUIElementCopyMultipleAttributeValues(element, Self.mappedAttributes as CFArray, [], &raw) == .success,
             let values = raw as? [AnyObject], values.count == 11
         else { return (info(element), frame(of: element), attribute(element, kAXChildrenAttribute) ?? []) }
         func string(_ i: Int) -> String? {
