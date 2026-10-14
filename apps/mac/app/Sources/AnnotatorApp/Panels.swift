@@ -161,9 +161,10 @@ struct MenuPanel: View {
         return tone == "error" || (tone == "warning" && pending == 0 && failed == 0)
     }
     var body: some View {
+        let days = Self.days(model.items)
         VStack(spacing: 0) {
             header
-            ScrollView {
+            KitScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
                     if pending > 0 {
@@ -171,18 +172,48 @@ struct MenuPanel: View {
                     }
                     if failed > 0 { Button("Show \(failed) refused comments") { model.act("show_failed") }.buttonStyle(.kit).padding(.bottom, Kit.Space.m) }
                     if model.items.isEmpty { MenuEmpty(hotkey: model.state["hotkey"]["display"].string) }
-                    ForEach(Array(model.items.sorted { $0["number"].int > $1["number"].int }.prefix(5)), id: \.self) { item in
-                        MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
+                    // As in Operator's transcript list: every annotation, newest first, under day headings.
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(days, id: \.label) { day in
+                            Text(verbatim: day.label).font(.kitSection).foregroundStyle(.secondary)
+                                .padding(.leading, Kit.rowInset)
+                                .padding(.top, day.label == days.first?.label ? 2 : Kit.Space.xxl)
+                                .padding(.bottom, Kit.Space.xs)
+                            ForEach(day.items, id: \.self) { item in
+                                MenuAnnotationRow(item: item) { model.navigate("all", id: item["id"].string) }
+                            }
+                        }
                     }
                 }
-                .padding(.horizontal, Kit.columnMargin).padding(.bottom, Kit.columnMargin)
+                .padding(.horizontal, Kit.columnMargin).padding(.bottom, 28)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-            }.scrollIndicators(.never)
+            }.scrollIndicators(.never).kitBottomFade()
         }
         // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
         // to a strip; give its host a measured height and scroll only when needed.
         .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
+    }
+    /// Annotations by day, newest first, labelled as Operator labels transcriptions.
+    static func days(_ items: [JSON], now: Date = Date(), calendar: Calendar = .current) -> [(label: String, items: [JSON])] {
+        var days: [(label: String, items: [JSON])] = []
+        for item in items.sorted(by: { $0["number"].int > $1["number"].int }) {
+            let label = dayLabel(item["createdAt"].double, now: now, calendar: calendar)
+            if days.last?.label == label { days[days.count - 1].items.append(item) } else { days.append((label, [item])) }
+        }
+        return days
+    }
+    private static func dayLabel(_ milliseconds: Double, now: Date, calendar: Calendar) -> String {
+        guard milliseconds > 0 else { return "Earlier" }
+        let date = Date(timeIntervalSince1970: milliseconds / 1000)
+        let diff = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        if diff == 0 { return "Today" }
+        if diff == 1 { return "Yesterday" }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        formatter.setLocalizedDateFormatFromTemplate(diff < 7 ? "EEEE" : sameYear ? "MMMMd" : "MMMMdy")
+        return formatter.string(from: date)
     }
     /// As in Operator: the title starts where row text starts, and one ⋯ menu holds the app's actions.
     private var header: some View {
