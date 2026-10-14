@@ -24,9 +24,12 @@ import DesignKit
             }
         }
         MenuBarExtra {
-            MenuPanel(model: model).kitAppearance().frame(width: 360).onAppear { model.act("menu_opened") }
+            MenuPanel(model: model).kitAppearance()
+                .background(WindowOpener(model: model))
+                .onAppear { model.act("menu_opened") }
         } label: {
-            Image(systemName: model.state["annotating"].bool ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+            Image(nsImage: StatusIcon.image(annotating: model.state["annotating"].bool))
+                .accessibilityLabel(model.state["annotating"].bool ? "Annotator: annotating" : "Annotator")
             let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
             if count > 0 { Text("\(count)") }
         }.menuBarExtraStyle(.window)
@@ -42,6 +45,9 @@ private struct WindowOpener: View {
         NSApp.setActivationPolicy(.accessory)
         AppModel.shared.start()
         #if DEBUG
+        if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_MENU_CHECK"] {
+            Task { await MenuCheck.run(AppModel.shared, directory: directory) }
+        }
         if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_UI_SNAPSHOTS"] {
             Task { await Demo.capture(AppModel.shared, directory: directory) }
         }
