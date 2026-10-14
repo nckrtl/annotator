@@ -1,5 +1,5 @@
-//! Projects route annotations to one agent session (Projects.swift, ProjectsStore.swift).
-//! Stored in `~/.config/annotator/routes.json`, in the Swift app's format.
+//! Projects route annotations by app and URL, and give agents a prompt for their queue.
+//! Stored in `~/.config/annotator/routes.json`.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -11,11 +11,6 @@ fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// New projects and files without the key ask before tools run.
-fn approval_required() -> String {
-    "approval-required".into()
-}
-
 /// Fields in key order: the file is written with sorted keys, like the Swift app.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -24,22 +19,13 @@ pub struct Project {
     pub bundle_ids: Vec<String>,
     #[serde(default = "new_id", deserialize_with = "id_or_new")]
     pub id: String,
+    /// Added to the agent prompt: how to run the app, which checks to run. Older files call it `notes`.
+    #[serde(default, alias = "notes")]
+    pub instructions: String,
     pub name: String,
-    /// Free text for the agent: how to run the app, where the code is, which checks to run.
-    #[serde(default)]
-    pub notes: String,
     /// The folder the agent works in.
     #[serde(default)]
     pub root: String,
-    /// Conn sessions: the model as `instance/model`. Empty uses the default.
-    #[serde(default)]
-    pub t3_model: String,
-    /// Conn sessions: one of RUNTIME_MODES.
-    #[serde(default = "approval_required")]
-    pub t3_runtime_mode: String,
-    /// Parts of the window title, case-insensitive.
-    #[serde(default)]
-    pub title_contains: Vec<String>,
     #[serde(default)]
     pub url_prefixes: Vec<String>,
 }
@@ -52,28 +38,22 @@ impl Project {
     #[cfg(test)]
     pub fn new(name: &str) -> Project {
         Project {
-            bundle_ids: vec![], id: new_id(), name: name.into(), notes: String::new(), root: String::new(),
-            t3_model: String::new(), t3_runtime_mode: approval_required(), title_contains: vec![], url_prefixes: vec![],
+            bundle_ids: vec![], id: new_id(), instructions: String::new(), name: name.into(), root: String::new(),
+            url_prefixes: vec![],
         }
     }
 
     pub fn has_rules(&self) -> bool {
-        !(self.bundle_ids.is_empty() && self.title_contains.is_empty() && self.url_prefixes.is_empty())
+        !(self.bundle_ids.is_empty() && self.url_prefixes.is_empty())
     }
 
     /// Each kind that has entries must match one of them; empty kinds are ignored.
-    pub fn matches(&self, bundle_id: Option<&str>, title: Option<&str>, url: Option<&str>) -> bool {
+    pub fn matches(&self, bundle_id: Option<&str>, url: Option<&str>) -> bool {
         if !self.has_rules() {
             return false;
         }
         if !self.bundle_ids.is_empty() && !self.bundle_ids.iter().any(|id| Some(id.as_str()) == bundle_id) {
             return false;
-        }
-        if !self.title_contains.is_empty() {
-            let title = title.unwrap_or_default().to_lowercase();
-            if !self.title_contains.iter().any(|part| title.contains(&part.to_lowercase())) {
-                return false;
-            }
         }
         if !self.url_prefixes.is_empty() && !self.url_prefixes.iter().any(|p| url.unwrap_or_default().starts_with(p.as_str())) {
             return false;
@@ -93,14 +73,14 @@ impl Routes {
     }
 
     /// The first project that matches, in file order; None for the inbox.
-    pub fn project(&self, bundle_id: Option<&str>, title: Option<&str>, url: Option<&str>) -> Option<&Project> {
-        self.projects.iter().find(|p| p.matches(bundle_id, title, url))
+    pub fn project(&self, bundle_id: Option<&str>, url: Option<&str>) -> Option<&Project> {
+        self.projects.iter().find(|p| p.matches(bundle_id, url))
     }
 
-    /// The project for a record the helper built: its app's bundle id, window title and web URL.
+    /// The project for a record the helper built: its app's bundle id and web URL.
     pub fn project_for_record(&self, record: &Value) -> Option<&Project> {
         let native = &record["native"];
-        self.project(native["app"]["bundleId"].as_str(), native["window"]["title"].as_str(), native["webUrl"].as_str())
+        self.project(native["app"]["bundleId"].as_str(), native["webUrl"].as_str())
     }
 
     /// A missing file is an empty list. A broken file is an error, so it is never overwritten silently.
@@ -182,7 +162,7 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// The text to paste into an agent session so it works through the queue. Byte-identical to AgentPrompt.swift.
+/// The text the user pastes into an agent so it works through the queue.
 pub fn agent_prompt(server: &str, scope: &Scope) -> String {
     let never = "Never claim without an id: that takes work from other projects.";
     let (title, project_name, root, claim) = match scope {
@@ -242,10 +222,10 @@ pub fn agent_prompt(server: &str, scope: &Scope) -> String {
     text += "\n";
     text += "Refer to annotations by their number, such as #12, never by id. Send JSON with `Content-Type: application/json`. HTTP 404 means the record is gone: do not recreate it.";
     if let Scope::Project(project) = scope {
-        let notes = project.notes.trim();
-        if !notes.is_empty() {
-            text += "\n\nNotes for this project:\n";
-            text += notes;
+        let instructions = project.instructions.trim();
+        if !instructions.is_empty() {
+            text += "\n\nInstructions for this project:\n";
+            text += instructions;
         }
     }
     text.replace("\n\n\n", "\n\n")
@@ -256,19 +236,21 @@ mod tests {
     use super::*;
     use crate::testutil::temp_dir;
 
-    fn t3() -> Project {
+    const DESKTOP: &str = "com.example.desktop";
+
+    fn desktop() -> Project {
         Project {
-            root: "/Users/me/apps/t3code".into(),
-            bundle_ids: vec!["com.t3tools.t3code.dev.t3code".into()],
-            notes: "Run with T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT=9222 pnpm dev:desktop.".into(),
-            ..Project::new("T3 Code Dev")
+            root: "/Users/me/apps/desktop".into(),
+            bundle_ids: vec![DESKTOP.into()],
+            instructions: "Run with DEBUG_PORT=9222 pnpm dev:desktop.".into(),
+            ..Project::new("Desktop Dev")
         }
     }
-    fn settings() -> Project {
+    fn local_web() -> Project {
         Project {
-            bundle_ids: vec!["com.t3tools.t3code.dev.t3code".into()],
-            title_contains: vec!["settings".into()],
-            ..Project::new("T3 Settings")
+            bundle_ids: vec![DESKTOP.into()],
+            url_prefixes: vec!["http://localhost:3000/".into()],
+            ..Project::new("Desktop Web")
         }
     }
     fn docs() -> Project {
@@ -277,28 +259,28 @@ mod tests {
 
     #[test]
     fn rules_of_each_kind_must_all_match() {
-        let id = Some("com.t3tools.t3code.dev.t3code");
-        assert!(settings().matches(id, Some("T3 — Settings"), None));
-        assert!(!settings().matches(id, Some("Chat"), None));
-        assert!(!settings().matches(Some("com.apple.finder"), Some("Settings"), None));
-        assert!(docs().matches(Some("com.google.Chrome"), None, Some("https://docs.example.com/a")));
-        assert!(!Project::new("Empty").matches(Some("x"), Some("x"), Some("x")));
+        let id = Some(DESKTOP);
+        assert!(local_web().matches(id, Some("http://localhost:3000/a")));
+        assert!(!local_web().matches(id, None));
+        assert!(!local_web().matches(Some("com.apple.finder"), Some("http://localhost:3000/a")));
+        assert!(docs().matches(Some("com.google.Chrome"), Some("https://docs.example.com/a")));
+        assert!(!Project::new("Empty").matches(Some("x"), Some("x")));
     }
 
     #[test]
     fn first_match_wins() {
-        let routes = Routes { projects: vec![settings(), t3(), docs()] };
-        let id = Some("com.t3tools.t3code.dev.t3code");
-        assert_eq!(routes.project(id, Some("Settings"), None).unwrap().name, "T3 Settings");
-        assert_eq!(routes.project(id, Some("Chat"), None).unwrap().name, "T3 Code Dev");
-        assert!(routes.project(Some("com.apple.mail"), None, None).is_none());
+        let routes = Routes { projects: vec![local_web(), desktop(), docs()] };
+        let id = Some(DESKTOP);
+        assert_eq!(routes.project(id, Some("http://localhost:3000/")).unwrap().name, "Desktop Web");
+        assert_eq!(routes.project(id, None).unwrap().name, "Desktop Dev");
+        assert!(routes.project(Some("com.apple.mail"), None).is_none());
     }
 
     #[test]
     fn file_round_trip_and_broken_file() {
         let file = temp_dir("routes").join("routes.json");
         assert_eq!(Routes::load(&file).unwrap(), Routes::default());
-        let routes = Routes { projects: vec![t3()] };
+        let routes = Routes { projects: vec![desktop()] };
         routes.save(&file).unwrap();
         assert_eq!(Routes::load(&file).unwrap(), routes);
         std::fs::write(&file, "{ not json").unwrap();
@@ -312,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn file_format_matches_the_swift_app() {
+    fn file_format_is_stable() {
         let file = temp_dir("routes").join("routes.json");
         let project = Project { id: "p".into(), root: "/a/b".into(), ..Project::new("Shop") };
         Routes { projects: vec![project] }.save(&file).unwrap();
@@ -321,12 +303,9 @@ mod tests {
     {
       "bundleIds": [],
       "id": "p",
+      "instructions": "",
       "name": "Shop",
-      "notes": "",
       "root": "/a/b",
-      "t3Model": "",
-      "t3RuntimeMode": "approval-required",
-      "titleContains": [],
       "urlPrefixes": []
     }
   ]
@@ -337,9 +316,24 @@ mod tests {
     fn minimal_file_loads() {
         let routes: Routes =
             serde_json::from_str(r#"{"projects":[{"name":"Shop","urlPrefixes":["http://localhost:8000/"]}]}"#).unwrap();
-        assert_eq!(routes.projects[0].t3_runtime_mode, "approval-required");
         assert_eq!(routes.projects[0].root, "");
         assert!(!routes.projects[0].id.is_empty());
+    }
+
+    #[test]
+    fn old_files_keep_their_notes() {
+        let folder = temp_dir("routes");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("routes.json");
+        std::fs::write(&file, r#"{"projects":[{"name":"Shop","notes":"Run checks","t3Model":"a/b",
+            "t3RuntimeMode":"full-access","titleContains":["Shop"],"bundleIds":["com.example.shop"]}]}"#).unwrap();
+        let routes = Routes::load(&file).unwrap();
+        assert_eq!(routes.projects[0].instructions, "Run checks");
+        assert_eq!(routes.projects[0].bundle_ids, ["com.example.shop"]);
+        routes.save(&file).unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(saved.contains(r#""instructions": "Run checks""#));
+        for old in ["notes", "t3Model", "t3RuntimeMode", "titleContains"] { assert!(!saved.contains(old), "{old}"); }
     }
 
     #[test]
@@ -354,15 +348,15 @@ mod tests {
 
     #[test]
     fn project_prompt() {
-        let project = t3();
+        let project = desktop();
         let prompt = agent_prompt("http://127.0.0.1:29703/annotations", &Scope::Project(&project));
         assert!(prompt.contains("ANNOTATIONS_URL='http://127.0.0.1:29703/annotations'"));
-        assert!(prompt.contains("PROJECT_ROOT='/Users/me/apps/t3code'"));
-        assert!(prompt.contains("PROJECT_NAME='T3 Code Dev'"));
+        assert!(prompt.contains("PROJECT_ROOT='/Users/me/apps/desktop'"));
+        assert!(prompt.contains("PROJECT_NAME='Desktop Dev'"));
         assert!(prompt.contains(r#"jq --arg project "$PROJECT_NAME""#));
         assert!(prompt.contains("select(.native.project == $project)"));
         assert!(prompt.contains("Never claim without an id"));
-        assert!(prompt.ends_with("Run with T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT=9222 pnpm dev:desktop."));
+        assert!(prompt.ends_with("Instructions for this project:\nRun with DEBUG_PORT=9222 pnpm dev:desktop."));
         assert!(!prompt.contains("\n\n\n"));
     }
 

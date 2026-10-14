@@ -1,7 +1,6 @@
 //! The commands the windows invoke (docs/port.md §2). Each one is a thin wrapper around app.rs.
 
 use crate::app::{self, shared};
-use crate::conn::{self, keychain};
 use crate::projects::{agent_prompt, Routes, Scope};
 use crate::settings::{home, Settings};
 use crate::{helper, ofide, panels, windows};
@@ -64,50 +63,6 @@ pub fn show_failed(app: AppHandle) -> Result<(), String> {
 fn project(app: &AppHandle, id: &str) -> Result<crate::projects::Project, String> {
     app::shared(app).core.lock().unwrap().projects.routes.projects.iter().find(|p| p.id == id).cloned()
         .ok_or_else(|| format!("No project with id {id}."))
-}
-
-pub async fn conn_start(app: AppHandle, project_id: String) -> Result<(), String> {
-    let project = project(&app, &project_id)?;
-    let settings = app::settings(&app);
-    let prompt = agent_prompt(&settings.server_url, &Scope::Project(&project));
-    let conn = shared(&app).conn.clone();
-    let result = conn.start(&settings, &project, &prompt).await.map(|_| ());
-    app::emit_state(&app);
-    if let Err(message) = &result {
-        app::alert(&app, "Conn", message);
-    }
-    result
-}
-
-pub async fn conn_open(app: AppHandle, project_id: String) -> Result<(), String> {
-    panels::hide_menu(&app);
-    let project = project(&app, &project_id)?;
-    let conn = shared(&app).conn.clone();
-    let result = conn.open(&app::settings(&app), &project).await;
-    app::emit_state(&app);
-    if let Err(message) = &result {
-        app::alert(&app, "Conn", message);
-    }
-    result
-}
-
-/// For adding the session server in a Conn window: Settings › Connections › Add environment.
-pub async fn conn_pairing_url(app: AppHandle) -> Result<String, String> {
-    let conn = shared(&app).conn.clone();
-    let result = conn.pairing_url(&app::settings(&app)).await;
-    app::emit_state(&app);
-    match result {
-        Ok(url) => {
-            app::copy(&url)?;
-            app::alert(&app, "Pairing URL copied",
-                "In Conn, open Settings › Connections › Add environment, choose the remote option and paste it. It works once and expires in 15 minutes.");
-            Ok(url)
-        }
-        Err(message) => {
-            app::alert(&app, "Conn", &message);
-            Err(message)
-        }
-    }
 }
 
 /// `scope`: `inbox`, `all` or a project id.
@@ -187,21 +142,6 @@ pub fn hotkey_recording(app: AppHandle, recording: bool) {
     }
 }
 
-pub fn conn_save_connection(app: AppHandle, endpoint: String, token: String) -> Result<String, String> {
-    let endpoint = conn::endpoint(&endpoint)?;
-    if !token.is_empty() {
-        keychain::save(&token, &endpoint).map_err(|e| e.to_string())?;
-    }
-    let mut settings = app::settings(&app);
-    settings.t3_endpoint = endpoint;
-    app::save_settings(&app, settings)?;
-    Ok("Connection saved.".into())
-}
-
-pub fn conn_token_saved(endpoint: String) -> bool {
-    matches!(keychain::read(&endpoint), Ok(Some(_)))
-}
-
 pub fn get_projects(app: AppHandle) -> Value {
     let state = shared(&app);
     let mut core = state.core.lock().unwrap();
@@ -217,13 +157,12 @@ pub fn save_projects(app: AppHandle, routes: Routes) -> Option<String> {
 }
 
 
-/// The app and window of the last annotation, to fill in project rules quickly.
+/// The app of the last annotation, to fill in a project's app rule quickly.
 pub fn last_target_app(app: AppHandle) -> Value {
     let record = shared(&app).core.lock().unwrap().last_target.clone();
     let Some(record) = record else { return Value::Null };
     let native = &record["native"];
-    json!({"name": native["app"]["name"], "bundleId": native["app"]["bundleId"],
-        "title": native["window"]["title"], "url": native["webUrl"]})
+    json!({"name": native["app"]["name"], "bundleId": native["app"]["bundleId"]})
 }
 
 // MARK: - Onboarding
@@ -289,9 +228,6 @@ pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Valu
 "clear_open" => {  serde_json::to_value(clear_open(app.clone()).await).map_err(|e| e.to_string()) },
 "retry_now" => {  serde_json::to_value(retry_now(app.clone())).map_err(|e| e.to_string()) },
 "show_failed" => {  serde_json::to_value(show_failed(app.clone())?).map_err(|e| e.to_string()) },
-"conn_start" => { let project_id: String = serde_json::from_value(args["projectId"].clone()).map_err(|e| format!("projectId: {e}"))?; serde_json::to_value(conn_start(app.clone(), project_id).await?).map_err(|e| e.to_string()) },
-"conn_open" => { let project_id: String = serde_json::from_value(args["projectId"].clone()).map_err(|e| format!("projectId: {e}"))?; serde_json::to_value(conn_open(app.clone(), project_id).await?).map_err(|e| e.to_string()) },
-"conn_pairing_url" => {  serde_json::to_value(conn_pairing_url(app.clone()).await?).map_err(|e| e.to_string()) },
 "copy_prompt" => { let scope: String = serde_json::from_value(args["scope"].clone()).map_err(|e| format!("scope: {e}"))?; serde_json::to_value(copy_prompt(app.clone(), scope)?).map_err(|e| e.to_string()) },
 "hide_menu" => {  serde_json::to_value(hide_menu(app.clone())).map_err(|e| e.to_string()) },
 "quit_app" => {  serde_json::to_value(quit_app(app.clone())).map_err(|e| e.to_string()) },
@@ -307,8 +243,6 @@ pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Valu
 "get_settings" => {  serde_json::to_value(get_settings(app.clone())).map_err(|e| e.to_string()) },
 "save_settings" => { let settings: Settings = serde_json::from_value(args["settings"].clone()).map_err(|e| format!("settings: {e}"))?; serde_json::to_value(save_settings(app.clone(), settings)?).map_err(|e| e.to_string()) },
 "hotkey_recording" => { let recording: bool = serde_json::from_value(args["recording"].clone()).map_err(|e| format!("recording: {e}"))?; serde_json::to_value(hotkey_recording(app.clone(), recording)).map_err(|e| e.to_string()) },
-"conn_save_connection" => { let endpoint: String = serde_json::from_value(args["endpoint"].clone()).map_err(|e| format!("endpoint: {e}"))?; let token: String = serde_json::from_value(args["token"].clone()).map_err(|e| format!("token: {e}"))?; serde_json::to_value(conn_save_connection(app.clone(), endpoint, token)?).map_err(|e| e.to_string()) },
-"conn_token_saved" => { let endpoint: String = serde_json::from_value(args["endpoint"].clone()).map_err(|e| format!("endpoint: {e}"))?; serde_json::to_value(conn_token_saved(endpoint)).map_err(|e| e.to_string()) },
 "get_projects" => {  serde_json::to_value(get_projects(app.clone())).map_err(|e| e.to_string()) },
 "save_projects" => { let routes: Routes = serde_json::from_value(args["routes"].clone()).map_err(|e| format!("routes: {e}"))?; serde_json::to_value(save_projects(app.clone(), routes)).map_err(|e| e.to_string()) },
 "last_target_app" => {  serde_json::to_value(last_target_app(app.clone())).map_err(|e| e.to_string()) },

@@ -89,12 +89,12 @@ while the comment panel is open.
 Persisted state:
 - Settings: `~/Library/Application Support/com.nckrtl.annotator/settings.json`. Fields and
   defaults from `src-tauri/src/settings.rs` in camelCase: `serverAutoStart, serverURL,
-  operatorEnabled, operatorAutoStart, t3Enabled, t3Endpoint, t3Effort, t3Home,
-  t3WindowHome, t3Nudge, t3DefaultModel, hotkey {keyCode, modifiers (Carbon flags)}`.
-- Conn sessions: `…/com.nckrtl.annotator/sessions.json` (the former `t3Sessions` value).
-- Projects: `~/.config/annotator/routes.json`, same format as `src-tauri/src/projects.rs`.
+  operatorEnabled, operatorAutoStart, hotkey {keyCode, modifiers (Carbon flags)}`.
+  Unknown keys, such as those of the removed Conn sessions, are ignored.
+- Projects: `~/.config/annotator/routes.json`, same format as `src-tauri/src/projects.rs`:
+  `{id, name, root, instructions, bundleIds, urlPrefixes}`. A project's old `notes` key is
+  read as `instructions`. Window title rules were removed; an old `titleContains` key is ignored.
 - Retry store: `~/Library/Application Support/Annotator/{pending,failed}/<id>.json` (unchanged).
-- Keychain: service `com.nckrtl.annotator.t3`, account = Conn endpoint (unchanged).
 - Local server: `src-tauri/src/local_server.rs`.
 
 ### Events Rust emits (to all windows)
@@ -124,7 +124,6 @@ type AppState = {
   queue: null | { todo: number; inProgress: number; done: number;
     open: QueueItem[]; finished: QueueItem[] };  // without screenshots; same order as QueueSummary
   pending: { count: number; lastError?: string }; failedCount: number;
-  conn: { enabled: boolean; lastError?: string; sessions: string[] /* project ids with a session */ };
   projects: { id: string; name: string; root: string }[]; projectsError?: string;
 };
 type CommentTarget = { label: string; mode: "element" | "window" | "region"; captureError?: string;
@@ -136,8 +135,7 @@ type CommentTarget = { label: string; mode: "element" | "window" | "region"; cap
 Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|"restart"}`,
 `show_server_log`, `open_server`, `open_settings {tab?: "general"|"projects"}`, `open_onboarding`,
 `open_annotation {id}`, `clear_open` (deletes all open items; returns `{failed: number}`),
-`retry_now`, `show_failed`, `conn_start {projectId}`, `conn_open {projectId}`,
-`conn_pairing_url` (copies it; returns the URL), `copy_prompt {scope: "inbox"|"all"|projectId}`,
+`retry_now`, `show_failed`, `copy_prompt {scope: "inbox"|"all"|projectId}`,
 `hide_menu`, `quit_app`.
 
 Comment: `submit_comment {text}` (closes the panel at once, posts in the background),
@@ -148,10 +146,8 @@ closes the comment. The internal `ofide` command name is retained.
 
 Settings: `get_settings`, `save_settings {settings}` (re-registers the hotkey, restarts the queue
 when the URL changed), `hotkey_recording {recording: bool}` (unregister the toggle hotkey while the
-recorder listens), `conn_save_connection {endpoint, token}` (validates like SettingsView; token to
-Keychain; returns the message), `conn_token_saved {endpoint}` → bool, `get_projects`,
-`save_projects {routes}` (returns an error string on failure),
-`last_target_app` → `{name, bundleId, title, url} | null`.
+recorder listens), `get_projects`, `save_projects {routes}` (returns an error string on failure),
+`last_target_app` → `{name, bundleId} | null`.
 
 Onboarding: `request_permission {kind: "accessibility"|"screenRecording"}`,
 `open_privacy {kind}` (opens the Settings pane), `relaunch`.
@@ -170,8 +166,7 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 - Escape → close the panel immediately, cancel dictation, end selection.
 - The old `resume`/`selectAt`/`clickWhileFrozen` protocol remains for compatibility;
   normal comments no longer use it or keep a full-screen click target.
-- Queue: SSE + polling (`QueueMonitor.swift`); retry pending when reachable; Conn nudges
-  (`T3Sessions.nudge`).
+- Queue: SSE + polling (`QueueMonitor.swift`); retry pending when reachable.
 - Menu bar: `pencil.tip.crop.circle`, with its filled variant during selection,
   and the open count. Identity and signing remain unchanged.
 
@@ -180,8 +175,8 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 The library combines list and detail. It sorts annotations by newest number,
 which preserves the queue's timeline rather than sorting comments alphabetically.
 Search, filters, screenshots, copy and confirmed deletion live here. Settings,
-Projects and the menu provide server controls, retries, failed files, Conn sessions
-and agent prompts. The editor preserves project order because routing uses the
+Projects and the menu provide server controls, retries, failed files and agent
+prompts. Annotator starts no agent sessions: users paste a copied prompt into any agent. The editor preserves project order because routing uses the
 first match. Saved locations stay the same. Dictation setting keys migrate as described in AGENTS.md.
 
 The comment owns one `Dictation` session. Start/stop/cancel stay serialized in

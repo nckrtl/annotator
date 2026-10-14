@@ -2,7 +2,6 @@
 mod annotations;
 mod app;
 mod commands;
-mod conn;
 mod geometry;
 mod helper;
 mod hotkey;

@@ -3,8 +3,7 @@
 # Reads `defaults export com.nckrtl.annotator -` and writes, in
 # ~/Library/Application Support/com.nckrtl.annotator:
 #   settings.json  the settings, with the shortcut's modifiers as Carbon flags
-#   sessions.json  the Conn sessions (the former t3Sessions value, unchanged)
-# Existing files stay unless you pass --force. Quit Annotator first.
+# An existing file stays unless you pass --force. Quit Annotator first.
 set -euo pipefail
 
 force=0
@@ -12,12 +11,10 @@ force=0
 target="$HOME/Library/Application Support/com.nckrtl.annotator"
 mkdir -p "$target"
 
-for file in settings.json sessions.json; do
-  if [[ -e "$target/$file" && $force -eq 0 ]]; then
-    echo "$target/$file exists. Pass --force to replace it." >&2
-    exit 1
-  fi
-done
+if [[ -e "$target/settings.json" && $force -eq 0 ]]; then
+  echo "$target/settings.json exists. Pass --force to replace it." >&2
+  exit 1
+fi
 
 plist="$(mktemp)"
 trap 'rm -f "$plist"' EXIT
@@ -34,15 +31,9 @@ with open(plist_path, "rb") as f:
     defaults = plistlib.load(f)
 
 settings = {}
-for key in ["serverAutoStart", "serverURL", "ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp",
-            "t3Enabled", "t3Endpoint", "t3Effort", "t3Home", "t3WindowHome", "t3Nudge", "t3DefaultModel"]:
+for key in ["serverAutoStart", "serverURL", "ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp"]:
     if key in defaults:
         settings[key] = defaults[key]
-
-# The Swift app moved everyone to Opus 5.5 at medium effort once.
-if not defaults.get("opus55DefaultApplied", False):
-    settings["t3DefaultModel"] = "claudeAgent/claude-opus-5-5"
-    settings["t3Effort"] = "medium"
 
 # Swift stored the shortcut as JSON: {"keyCode", "modifiers" (control 1, option 2, shift 4, command 8), "key"}.
 if "hotkey" in defaults:
@@ -62,6 +53,4 @@ def write(name, value):
     print("Wrote " + path)
 
 write("settings.json", settings)
-sessions = json.loads(bytes(defaults["t3Sessions"])) if "t3Sessions" in defaults else {}
-write("sessions.json", sessions)
 PY

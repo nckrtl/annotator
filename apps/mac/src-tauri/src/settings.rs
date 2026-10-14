@@ -92,18 +92,6 @@ pub struct Settings {
     pub ofide_enabled: bool,
     #[serde(rename = "operatorAutoStart", alias = "ofideAutoStart")]
     pub ofide_auto_start: bool,
-    pub t3_enabled: bool,
-    /// The Conn server that runs the sessions.
-    pub t3_endpoint: String,
-    pub t3_effort: String,
-    /// The data folder (`T3CODE_HOME`) of the Conn server on this Mac.
-    pub t3_home: String,
-    /// The data folder of the Conn window that shows the sessions.
-    pub t3_window_home: String,
-    /// Off for new installs: annotations are not sent onward unless the user asks. A saved choice is kept.
-    pub t3_nudge: bool,
-    /// The model for sessions whose project sets none, as `instance/model`.
-    pub t3_default_model: String,
     pub hotkey: Hotkey,
 }
 
@@ -114,13 +102,6 @@ impl Default for Settings {
             server_url: DEFAULT_SERVER_URL.into(),
             ofide_enabled: true,
             ofide_auto_start: true,
-            t3_enabled: true,
-            t3_endpoint: "http://127.0.0.1:3780".into(),
-            t3_effort: "medium".into(),
-            t3_home: "~/.t3/headless".into(),
-            t3_window_home: "~/.t3/desktop-dev".into(),
-            t3_nudge: false,
-            t3_default_model: "claudeAgent/claude-opus-5-5".into(),
             hotkey: Hotkey::STANDARD,
         }
     }
@@ -128,17 +109,6 @@ impl Default for Settings {
 
 pub fn home() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/".into()))
-}
-
-/// `~` and `~/…` expanded against the home folder.
-pub fn expand_tilde(path: &str) -> PathBuf {
-    if path == "~" {
-        home()
-    } else if let Some(rest) = path.strip_prefix("~/") {
-        home().join(rest)
-    } else {
-        PathBuf::from(path)
-    }
 }
 
 pub fn support_directory() -> PathBuf {
@@ -231,7 +201,6 @@ mod tests {
             let settings = Settings::load(&file);
             assert_eq!(settings.ofide_enabled, enabled);
             assert!(!settings.ofide_auto_start);
-            assert!(settings.t3_nudge);
             assert_eq!(settings.ofide().unwrap().as_str(), "http://127.0.0.1:12321/");
             let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
             assert_eq!(saved["operatorEnabled"], enabled);
@@ -269,15 +238,14 @@ mod tests {
         assert_eq!(settings.server_url, "http://localhost:1/annotations");
         assert!(settings.server_auto_start);
         assert_eq!(settings.hotkey, Hotkey::STANDARD);
-        assert_eq!(settings.t3_default_model, "claudeAgent/claude-opus-5-5");
-        assert!(!settings.t3_nudge);
-        let saved: Settings = serde_json::from_str(r#"{"t3Nudge":true}"#).unwrap();
-        assert!(saved.t3_nudge);
+        // Keys of the removed Conn sessions are ignored.
+        let old: Settings = serde_json::from_str(r#"{"t3Enabled":true,"t3Endpoint":"http://x","t3Nudge":true}"#).unwrap();
+        assert_eq!(old, Settings::default());
         let json = serde_json::to_value(Settings::default()).unwrap();
-        for key in ["serverAutoStart", "serverURL", "operatorEnabled", "operatorAutoStart",
-            "t3Enabled", "t3Endpoint", "t3Effort", "t3Home", "t3WindowHome", "t3Nudge", "t3DefaultModel"] {
+        for key in ["serverAutoStart", "serverURL", "operatorEnabled", "operatorAutoStart", "hotkey"] {
             assert!(json.get(key).is_some(), "{key}");
         }
+        assert_eq!(json.as_object().unwrap().len(), 5);
         assert_eq!(json["hotkey"], serde_json::json!({"keyCode": 0, "modifiers": 6144}));
     }
 
@@ -287,10 +255,10 @@ mod tests {
         let mut new = old.clone();
         new.server_url = "http://example.com/annotations".into();
         new.hotkey = Hotkey { key_code: 1, modifiers: SHIFT };
-        new.t3_nudge = true;
+        new.server_auto_start = false;
         let merged = old.merged(new);
         assert_eq!(merged.server_url, DEFAULT_SERVER_URL);
         assert_eq!(merged.hotkey, Hotkey::STANDARD);
-        assert!(merged.t3_nudge);
+        assert!(!merged.server_auto_start);
     }
 }

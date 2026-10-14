@@ -21,8 +21,8 @@ import ScreenCaptureKit
     }
     static func populate(_ model: AppModel) {
         #if DEBUG
-        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"operatorEnabled":true,"operatorAutoStart":true,"t3Enabled":true,"t3Endpoint":"http://127.0.0.1:3780","t3Home":"~/.t3/headless","t3WindowHome":"~/.t3/desktop-dev","t3Nudge":false,"t3DefaultModel":"claudeAgent/claude-opus-5-5","t3Effort":"medium","hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
-        var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); project["id"] = .string("website"); project["notes"] = .string("Run the local website before checking annotations.")
+        model.settings = try! JSON.decode(Data(#"{"serverURL":"http://127.0.0.1:29703/annotations","serverAutoStart":true,"operatorEnabled":true,"operatorAutoStart":true,"hotkey":{"keyCode":0,"modifiers":6144}}"#.utf8))
+        var project = newProject(); project["name"] = .string("Website"); project["root"] = .string("~/Projects/website"); project["bundleIds"] = .array([.string("com.apple.Safari")]); project["urlPrefixes"] = .array([.string("http://localhost:3000")]); project["id"] = .string("website"); project["instructions"] = .string("Run the local website with bun dev before checking annotations.")
         var native = newProject(); native["id"] = .string("desktop"); native["name"] = .string("Desktop app"); native["root"] = .string("~/Projects/desktop"); native["bundleIds"] = .array([.string("com.example.desktop")])
         var docs = newProject(); docs["id"] = .string("docs"); docs["name"] = .string("Documentation"); docs["urlPrefixes"] = .array([.string("https://docs.example.com")])
         model.projects = [project, native, docs]; model.selectedProjectID = ""
@@ -36,7 +36,7 @@ import ScreenCaptureKit
         model.items[1]["native"]["project"] = .string("Desktop app")
         model.items[3]["native"]["project"] = .string("Inbox")
         model.items[3]["summary"] = .string("Increased the search field width and kept the clear button visible.")
-        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌃⌥A"},"localServer":{"running":true,"busy":false},"conn":{"enabled":true}}"#.utf8))
+        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌃⌥A"},"localServer":{"running":true,"busy":false}}"#.utf8))
         model.selected = "demo-215"
         #endif
     }
@@ -53,16 +53,6 @@ import ScreenCaptureKit
         for appearance in ["light", "dark"] {
             NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
             window.appearance = NSApp.appearance
-            if ProcessInfo.processInfo.environment["ANNOTATOR_UI_CONN_CHECK"] == "1" {
-                populate(model); model.navigate("projects"); model.selectedProjectID = "website"
-                await shot(window, "\(appearance)-conn-projects", directory)
-                model.error = "Could not start a Conn session for Website: Could not read Conn's snapshot (version 0.0.46): projects[0]: missing field `workspaceRoot`."
-                try? await Task.sleep(for: .seconds(1))
-                await shot(window, "\(appearance)-conn-error", directory)
-                model.error = nil
-                try? await Task.sleep(for: .milliseconds(600))
-                continue
-            }
             populate(model); model.page = "all"
             await shot(window, "\(appearance)-01-library", directory)
             model.page = "open"
@@ -86,8 +76,6 @@ import ScreenCaptureKit
             await shot(window, "\(appearance)-06-settings", directory)
             NotificationCenter.default.post(name: .demoSettingsSection, object: "dictation")
             await shot(window, "\(appearance)-07-dictation", directory)
-            NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
-            await shot(window, "\(appearance)-08-conn", directory)
             model.navigate("projects")
             await shot(window, "\(appearance)-28-project-empty-detail", directory)
             model.selectedProjectID = "website"
@@ -154,8 +142,6 @@ import ScreenCaptureKit
             await shot(window, "\(appearance)-19-minimum-size", directory)
             NotificationCenter.default.post(name: .demoSettingsSection, object: "dictation")
             await shot(window, "\(appearance)-41-dictation-minimum", directory)
-            NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
-            await shot(window, "\(appearance)-42-conn-minimum", directory)
             window.setContentSize(NSSize(width: 1000, height: 680))
             let raw = screenshot.split(separator: ",", maxSplits: 1)[1]
             let image = NSImage(data: Data(base64Encoded: String(raw))!)!
@@ -168,10 +154,6 @@ import ScreenCaptureKit
             await shot(window, "\(appearance)-21-settings-bottom", directory)
             NotificationCenter.default.post(name: .demoSettingsSection, object: "dictation")
             await shot(window, "\(appearance)-21b-settings-dictation", directory)
-            NotificationCenter.default.post(name: .demoSettingsSection, object: "conn")
-            try? await Task.sleep(for: .milliseconds(250))
-            scrollToBottom(window.contentView)
-            await shot(window, "\(appearance)-22-conn-bottom", directory)
         }
         NSApp.terminate(nil)
     }
