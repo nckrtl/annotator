@@ -96,12 +96,15 @@ struct CommentView: View {
             Text("↩ submits · ⇧↩ adds a line · Esc cancels").font(.kitDetail).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 if model.target["dictation"] != .null {
-                    KitIconButton(.microphone, help: model.dictation == "recording" ? "Stop dictation" : "Dictate comment", spinning: model.dictation == "transcribing") {
+                    KitIconButton(.microphone, help: model.dictation == "recording" ? "Stop dictation" : "Dictate comment") {
                         focused = true
                         if model.dictation == "recording" { Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } } }
                         else { model.startDictation() }
                     }.disabled(model.commentBusy || ["starting", "transcribing"].contains(model.dictation))
                     Text(model.dictation == "idle" ? "Dictate" : model.dictation.capitalized + "…").font(.kitDetail).foregroundStyle(.secondary)
+                    if model.dictation == "transcribing" {
+                        KitStatusIcon(.working, size: 12).accessibilityHidden(true)
+                    }
                 }
                 Spacer()
                 Button("Submit") { Task { await model.submit() } }.buttonStyle(.kitPrimary).keyboardShortcut(.return, modifiers: .command)

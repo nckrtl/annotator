@@ -72,6 +72,7 @@ import AnnotatorCore
             guard !panel.isVisible, model.voice.phase == "idle" else { throw BridgeError("Escape left the panel open") }
             try await Task.sleep(for: .milliseconds(50))
             guard calls.contains("cancel") else { throw BridgeError("Failure did not cancel Operator") }
+            try await DictationFrames.capture(model, directory: directory, unfocused: unfocused)
             let focus = unfocused ? "SKIPPED real focus: explicit unfocused fixture mode." : "PASS: frontmost Annotator PID and key text field."
             let report = "PASS: activating panel, editable text view, missing-paste error, overlay release, typing recovery, responder paste, Escape closes. API actions: \(calls.joined(separator: ", ")).\n\(focus)\n"
             try report.write(toFile: directory + "/dictation-panel-check.txt", atomically: true, encoding: .utf8)
