@@ -9,7 +9,7 @@ require_signing_identity
 entitlements=$root/src-tauri/Entitlements.plist
 unlock_signing_keychain
 codesign --force --options runtime --sign "$ANNOTATOR_SIGNING_IDENTITY" --identifier com.nckrtl.annotator.native \
-  "$app/Contents/Resources/annotator-native"
+  "$app/Contents/Helpers/AnnotatorNative.app"
 codesign --force --options runtime --sign "$ANNOTATOR_SIGNING_IDENTITY" --identifier com.nckrtl.annotator.core \
   "$app/Contents/Resources/annotator-core"
 codesign --force --options runtime --sign "$ANNOTATOR_SIGNING_IDENTITY" --entitlements "$entitlements" "$app"

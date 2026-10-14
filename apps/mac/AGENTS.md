@@ -252,7 +252,12 @@ it imports neither SwiftUI nor AppKit. Only the UI target owns windows, Carbon
 shortcuts, focus and file pickers.
 
 The SwiftUI host starts `Contents/Resources/annotator-core` over inherited
-stdin/stdout pipes. The core starts `annotator-native` beside it. No network
+stdin/stdout pipes. The core directly spawns
+`Contents/Helpers/AnnotatorNative.app/Contents/MacOS/annotator-native`. The helper has its
+own `com.nckrtl.annotator.native` bundle ID and LSUIElement flag, matching its existing signing
+ID. Keep the inherited TCC responsibility; never launch the helper through LaunchServices.
+Sign its bundle before signing the host. The installer terminates only the running application
+whose executable path matches the installed host, then waits for that PID. No network
 listener is added. `ANNOTATOR_HOST_PID` tells the helper to exclude all three
 processes from hit testing and capture. Closing the host's pipe stops the core
 and its helper. A core failure is visible and fails all outstanding requests.
