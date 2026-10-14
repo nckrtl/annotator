@@ -54,7 +54,7 @@ Commands:
 | `permissions` | | answer `permissions` |
 | `requestScreenCapture` | | `CGRequestScreenCaptureAccess()`, then answer `permissions` |
 | `requestAccessibility` | | `AXIsProcessTrustedWithOptions(prompt: true)`, then answer `permissions` |
-| `annotate` | `on: bool`, `backdrop: bool` | show the overlay on all screens and freeze them, or hide it; `backdrop` keeps a frozen screen behind the comment |
+| `annotate` | `on: bool`, `backdrop: bool` | map the focused window and open menus, freeze all screens, then show the overlay; or hide it; `backdrop` keeps a frozen screen behind the comment |
 | `resume` | | the comment panel closed: unfreeze the overlay and hover again |
 | `selectAt` | `x, y` (global top-left points) | select at this point as if clicked (moving the comment) |
 

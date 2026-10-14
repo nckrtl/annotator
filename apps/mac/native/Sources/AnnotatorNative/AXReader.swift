@@ -90,48 +90,127 @@ final class AXReader: @unchecked Sendable {
             app: app, window: WindowInfo(title: title, id: number, frame: bounds), bundleURL: bundle?.bundleURL)
     }
 
-    /// Open menus and flyouts: windows at the status and menu layers taller than a menu bar item.
-    /// For each, the outermost element that fits the window, then its elements, breadth first and bounded.
+    /// The windows on screen, front to back. The focused app's focused window and open menus and flyouts
+    /// get their elements mapped, so they stay selectable once the screen is frozen. A window whose map
+    /// does not finish within the budget stays on live hit testing; it is never half mapped.
     private func readFrozenElements() -> FrozenElements {
         guard
             let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]]
         else { return FrozenElements() }
-        let layers = [Int(CGWindowLevelForKey(.statusWindow)), Int(CGWindowLevelForKey(.popUpMenuWindow))]
+        let focusedApp: AXUIElement? = attribute(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute)
+        var focusedPid: pid_t = 0
+        if let focusedApp { AXUIElementGetPid(focusedApp, &focusedPid) }
+        let focusedWindow = focusedApp.flatMap { (attribute($0, kAXFocusedWindowAttribute) as AXUIElement?) }
+        let focusedFrame = focusedWindow.flatMap { frame(of: $0) }
+        let menuLayers = [Int(CGWindowLevelForKey(.statusWindow)), Int(CGWindowLevelForKey(.popUpMenuWindow))]
+        let deadline = Date().addingTimeInterval(1.5)
+
         var frozen = FrozenElements()
         for info in list {
-            guard let layer = info[kCGWindowLayer as String] as? Int, layers.contains(layer),
-                let found = window(from: info), found.window.frame.height > 40
+            guard let layer = info[kCGWindowLayer as String] as? Int,
+                (0..<20).contains(layer) || AXReader.menuLayers.contains(layer),
+                let found = window(from: info)
             else { continue }
-            let frame = found.window.frame
-            let appElement = AXUIElementCreateApplication(found.app.pid)
-            var hit: AXUIElement?
-            guard AXUIElementCopyElementAtPosition(appElement, Float(frame.midX), Float(frame.midY), &hit) == .success,
-                var root = hit
-            else { continue }
-            let window = frame.insetBy(dx: -2, dy: -2)
-            while let parent: AXUIElement = attribute(root, kAXParentAttribute),
-                (attribute(parent, kAXRoleAttribute) as String?) != kAXApplicationRole,
-                let parentFrame = self.frame(of: parent), window.contains(parentFrame)
+            var window = FrozenWindow(id: found.window.id, frame: found.window.frame)
+            let isMenu = menuLayers.contains(layer) && found.window.frame.height > 40
+            let isFocused = found.app.pid == focusedPid && focusedFrame.map { Self.same($0, found.window.frame) } == true
+            if isMenu || isFocused, Date() < deadline,
+                let root = isFocused ? focusedWindow : rootElement(of: found),
+                let mapped = map(root, in: found, until: deadline)
             {
-                root = parent
+                window.target = Target(mode: .window, app: found.app, window: found.window, frame: found.window.frame)
+                window.elements = mapped
+                window.menu = isMenu
             }
-            frozen.windows.append(frame)
-            var queue = [root]
-            var visited = 0
-            while !queue.isEmpty, visited < 400 {
-                let element = queue.removeFirst()
-                visited += 1
-                if let elementFrame = self.frame(of: element), Geometry.isUsable(elementFrame), window.contains(elementFrame),
-                    let target = target(for: element, in: found, text: false)
-                {
-                    frozen.targets.append(target)
-                }
-                let children: [AXUIElement] = attribute(element, kAXChildrenAttribute) ?? []
-                queue.append(contentsOf: children.prefix(100))
-            }
+            frozen.windows.append(window)
         }
         return frozen
+    }
+
+    private static func same(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
+    }
+
+    /// The element that holds a menu or flyout window: its AXWindow when the app lists one with that frame,
+    /// else the AXMenu or AXWindow above the element at its center.
+    private func rootElement(of found: FoundWindow) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(found.app.pid)
+        let windows: [AXUIElement] = attribute(app, kAXWindowsAttribute) ?? []
+        if let match = windows.first(where: { frame(of: $0).map { Self.same($0, found.window.frame) } == true }) {
+            return match
+        }
+        var hit: AXUIElement?
+        let frame = found.window.frame
+        guard AXUIElementCopyElementAtPosition(app, Float(frame.midX), Float(frame.midY), &hit) == .success,
+            var current = hit
+        else { return nil }
+        for _ in 0..<64 {
+            let role: String? = attribute(current, kAXRoleAttribute)
+            if role == kAXMenuRole || role == kAXWindowRole { return current }
+            guard let parent: AXUIElement = attribute(current, kAXParentAttribute),
+                (attribute(parent, kAXRoleAttribute) as String?) != kAXApplicationRole
+            else { return current }
+            current = parent
+        }
+        return current
+    }
+
+    /// Every element under `root` that shows inside the window, breadth first, with its path from `root`.
+    /// Nil when the tree does not finish by `deadline` or has more than 5,000 elements.
+    private func map(_ root: AXUIElement, in found: FoundWindow, until deadline: Date) -> [Target]? {
+        var targets: [Target] = []
+        var queue: [(AXUIElement, [AXElementInfo])] = [(root, [])]
+        var index = 0
+        while index < queue.count {
+            guard index < 5_000, Date() < deadline else { return nil }
+            let (element, parents) = queue[index]
+            index += 1
+            let node = read(element)
+            let path = parents + [node.info]
+            if let frame = node.frame?.intersection(found.window.frame), Geometry.isUsable(frame) {
+                targets.append(Target(
+                    mode: .element, app: found.app, window: found.window, frame: frame, element: node.info, path: path))
+            }
+            queue.append(contentsOf: node.children.map { ($0, path) })
+        }
+        return targets
+    }
+
+    private static let mappedAttributes = [
+        kAXRoleAttribute, kAXSubroleAttribute, kAXRoleDescriptionAttribute, kAXTitleAttribute,
+        kAXDescriptionAttribute, kAXIdentifierAttribute, kAXValueAttribute, kAXHelpAttribute,
+        kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
+    ] as CFArray
+
+    /// One element's details, frame and children in a single accessibility call.
+    private func read(_ element: AXUIElement) -> (info: AXElementInfo, frame: CGRect?, children: [AXUIElement]) {
+        var raw: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(element, Self.mappedAttributes, [], &raw) == .success,
+            let values = raw as? [AnyObject], values.count == 11
+        else { return (info(element), frame(of: element), attribute(element, kAXChildrenAttribute) ?? []) }
+        func string(_ i: Int) -> String? {
+            if let text = values[i] as? String { return text.isEmpty ? nil : text }
+            if let number = values[i] as? NSNumber, CFGetTypeID(number) != AXValueGetTypeID() { return number.stringValue }
+            return nil
+        }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        var frame: CGRect?
+        if CFGetTypeID(values[8]) == AXValueGetTypeID(), CFGetTypeID(values[9]) == AXValueGetTypeID(),
+            AXValueGetValue(values[8] as! AXValue, .cgPoint, &position),
+            AXValueGetValue(values[9] as! AXValue, .cgSize, &size)
+        {
+            frame = CGRect(origin: position, size: size)
+        }
+        let children = (values[10] as? [AnyObject] ?? []).compactMap {
+            CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil
+        }
+        let info = AXElementInfo(
+            role: values[0] as? String, subrole: values[1] as? String, roleDescription: values[2] as? String,
+            title: values[3] as? String, description: values[4] as? String, identifier: values[5] as? String,
+            value: string(6), help: values[7] as? String)
+        return (info, frame, children)
     }
 
     /// The app bundle that contains the process's executable. Read from the executable path, because

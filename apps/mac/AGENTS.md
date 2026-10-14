@@ -45,9 +45,11 @@ helper. Read this file before you change it.
    item turns annotate mode on and off. Esc turns it off.
 2. **Overlay.** In annotate mode, one borderless transparent `NSPanel` per
    screen covers the display above everything, open menus included, like the
-   system screenshot tool. The screen freezes: the helper captures every display
-   and records the elements of open menus and flyouts, so they stay visible and
-   selectable after the comment panel takes focus and they close. It takes mouse events, so
+   system screenshot tool. Nothing takes focus, so open menus stay open. The
+   helper first maps the element tree of the focused app's focused window and
+   of open menus and flyouts (1.5 s budget; an unfinished window stays live),
+   then captures every display, then shows the overlay over that frozen screen.
+   Menus stay visible and selectable after the comment panel takes focus. It takes mouse events, so
    clicks do not reach the app underneath. It draws a highlight rectangle
    around the hovered element and a small label: app name, role and title.
 3. **Hit test.** On mouse move, find the element under the cursor:

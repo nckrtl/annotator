@@ -1,29 +1,52 @@
 import CoreGraphics
 
-/// The elements of menus and flyouts as they were when annotate mode started.
-/// They close once the comment panel takes focus; their record keeps them selectable on the frozen screen.
+/// One window on screen when annotate mode started, front to back.
+public struct FrozenWindow: Sendable, Equatable {
+    public var id: UInt32
+    /// Global top-left points.
+    public var frame: CGRect
+    /// The window itself, when its elements were mapped. Nil keeps hover there live.
+    public var target: Target?
+    public var elements: [Target]
+    /// A menu or flyout. It closes once the comment panel takes focus, so only the map can answer for it.
+    public var menu: Bool
+
+    public init(id: UInt32, frame: CGRect, target: Target? = nil, elements: [Target] = [], menu: Bool = false) {
+        self.id = id
+        self.frame = frame
+        self.target = target
+        self.elements = elements
+        self.menu = menu
+    }
+}
+
+/// The screen's windows and the mapped elements of the focused window and of open menus and flyouts,
+/// as they were when annotate mode started. Menus close once the comment panel takes focus;
+/// the map keeps them selectable on the frozen screen.
 public struct FrozenElements: Sendable, Equatable {
-    /// The recorded windows, in global top-left points.
-    public var windows: [CGRect]
-    public var targets: [Target]
+    public enum Lookup: Equatable {
+        case live
+        case mapped(Target, menu: Bool)
+    }
 
-    public init(windows: [CGRect] = [], targets: [Target] = []) {
+    /// Front to back.
+    public var windows: [FrozenWindow]
+
+    public init(windows: [FrozenWindow] = []) {
         self.windows = windows
-        self.targets = targets
     }
 
-    /// Whether `point` falls in a recorded window. Then the record answers, not live accessibility.
-    public func covers(_ point: CGPoint) -> Bool {
-        windows.contains { $0.contains(point) }
-    }
-
-    /// The smallest recorded element at `point`. Menus hide unnamed items under the visible ones,
+    /// The frontmost window at `point` decides. In a mapped window, the smallest element at `point`
+    /// wins, and the window itself without one. Menus hide unnamed items under the visible ones,
     /// so a named element wins over an unnamed one of the same size.
-    public func target(at point: CGPoint) -> Target? {
-        targets.filter { $0.frame.contains(point) }.min {
+    public func lookup(_ point: CGPoint) -> Lookup {
+        guard let window = windows.first(where: { $0.frame.contains(point) }), let target = window.target
+        else { return .live }
+        let element = window.elements.filter { $0.frame.contains(point) }.min {
             let (a, b) = (area($0.frame), area($1.frame))
             return a != b ? a < b : ($0.element?.name != nil && $1.element?.name == nil)
         }
+        return .mapped(element ?? target, menu: window.menu)
     }
 
     private func area(_ rect: CGRect) -> CGFloat { rect.width * rect.height }

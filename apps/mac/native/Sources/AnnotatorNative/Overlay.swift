@@ -30,6 +30,8 @@ final class OverlayController {
     private var frozen = FrozenElements()
     /// The frozen screen stays behind the comment panel. It takes no hover; a click on it removes it.
     private(set) var passive = false
+    /// Mapping and freezing; the panels follow.
+    private var preparing = false
     var onSelect: ((Target) -> Void)?
     /// A click on the overlay while the comment panel is open: finish that comment, then move here.
     var onClickWhileFrozen: ((CGPoint) -> Void)?
@@ -66,24 +68,18 @@ final class OverlayController {
         }
     }
 
-    /// Like the system screenshot tool, the screen freezes: open menus stay visible and selectable
-    /// even after they close. Hovering stays live elsewhere.
+    /// Like the system screenshot tool. Nothing takes focus, so open menus stay open while the helper
+    /// maps the focused window and the menus, then freezes the screen, then shows the selector over both.
+    /// Menus stay visible and selectable after they close. Unmapped windows keep live hit testing.
     func show() {
         if passive { hide(reason: "restart") }
-        guard panels.isEmpty else { return }
+        guard panels.isEmpty, !preparing else { return }
         generation += 1
-        state = .hovering(nil)
-        watchdog.activity()
-        panels = NSScreen.screens.map { screen in
-            let panel = OverlayPanel(screen: screen, controller: self)
-            panel.orderFrontRegardless()
-            return panel
-        }
-        NSCursor.crosshair.set()
-        mouseMoved()
+        preparing = true
         let session = generation
         Task {
-            async let elements = reader.frozenElements()
+            let recorded = await reader.frozenElements()
+            guard session == generation else { return }
             let captured: [Capture.Still]
             do {
                 captured = try await Capture.stills()
@@ -91,16 +87,25 @@ final class OverlayController {
                 captured = []
                 emit(["type": "log", "message": "The screen did not freeze: \(error)"])
             }
-            let recorded = await elements
-            guard session == generation, isVisible else { return }
-            stills = captured
+            guard session == generation else { return }
+            preparing = false
             frozen = recorded
-            redraw()
+            stills = captured
+            state = .hovering(nil)
+            watchdog.activity()
+            panels = NSScreen.screens.map { screen in
+                let panel = OverlayPanel(screen: screen, controller: self)
+                panel.orderFrontRegardless()
+                return panel
+            }
+            NSCursor.crosshair.set()
+            mouseMoved()
         }
     }
 
     func hide(reason: String = "cancel-or-release") {
         generation += 1
+        preparing = false
         watchdog.stop()
         if isVisible { logOverlayRelease(reason) }
         queuedPoint = nil
@@ -221,7 +226,8 @@ final class OverlayController {
     /// Accessibility first. `dom` asks DevTools for the real element. Hover leaves it off:
     /// a probe on every move stalls the highlight and runs script in the page.
     private func resolve(_ point: CGPoint, dom: Bool) async -> Target? {
-        if frozen.covers(point) { return frozen.target(at: point) }
+        // A click in a mapped app window reads it live, for the web URL and DOM; menus may close, so the map answers.
+        if case .mapped(let target, let menu) = frozen.lookup(point), menu || !dom { return target }
         guard let target = await reader.target(at: point, text: dom) else { return nil }
         guard dom else { return target }
         let appKitPoint = Geometry.appKit(fromTopLeft: CGRect(origin: point, size: .zero), mainScreenHeight: NSScreen.mainHeight).origin
