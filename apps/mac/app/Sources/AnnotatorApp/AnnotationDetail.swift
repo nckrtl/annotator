@@ -76,7 +76,7 @@ struct ScreenshotView: View {
     let close: () -> Void
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("Screenshot").font(.kitTitle); Spacer(); Button("Done", action: close).buttonStyle(.kitSecondary).keyboardShortcut(.cancelAction) }.padding(20)
+            HStack { Text("Screenshot").font(.kitTitle); Spacer(); KitToolbarGroup { KitToolbarButton("Done", action: close).keyboardShortcut(.cancelAction) } }.padding(20)
             ScrollView([.horizontal, .vertical]) { Image(nsImage: image).resizable().scaledToFit().frame(width: min(image.size.width, 1000)) }
         }.frame(width: 800, height: 560).background(Color.kitContent)
     }

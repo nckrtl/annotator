@@ -67,9 +67,9 @@ struct SettingsPage: View {
             }.frame(maxWidth: Kit.readableWidth).padding(Kit.columnMargin).padding(.bottom, 28).frame(maxWidth: .infinity)
         }.kitBottomFade().kitTopBar {
             PageBar(title: "Settings") {
-                HStack(spacing: 12) {
-                    KitPicker(selection: $section, options: [("general", "General"), ("dictation", "Dictation"), ("conn", "Conn")])
-                    Button(saved ? "Saved" : "Save") { Task { await model.saveSettings(); saved = model.error == nil; try? await Task.sleep(for: .seconds(1.6)); saved = false } }.buttonStyle(.kitPrimary)
+                KitToolbarGroup {
+                    KitToolbarPicker(selection: $section, options: [("general", "General"), ("dictation", "Dictation"), ("conn", "Conn")])
+                    KitToolbarButton(saved ? "Saved" : "Save") { Task { await model.saveSettings(); saved = model.error == nil; try? await Task.sleep(for: .seconds(1.6)); saved = false } }
                 }
             }
         }
