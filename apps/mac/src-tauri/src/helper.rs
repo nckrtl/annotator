@@ -66,7 +66,11 @@ pub struct Helper(Mutex<Inner>);
 
 fn binary(_app: &crate::runtime::AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("ANNOTATOR_HELPER") { return Ok(PathBuf::from(path)); }
-    Ok(std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("annotator-native"))
+    let core = std::env::current_exe().map_err(|e| e.to_string())?;
+    let resources = core.parent().ok_or("Core executable has no parent directory")?;
+    let contents = resources.parent().ok_or("Core executable has no Contents directory")?;
+    // Spawn directly, retaining the UI host's TCC responsibility. This is not a login item.
+    Ok(contents.join("Helpers/AnnotatorNative.app/Contents/MacOS/annotator-native"))
 }
 
 fn launch(app: &crate::runtime::AppHandle, generation: u64) -> Result<Running, String> {
