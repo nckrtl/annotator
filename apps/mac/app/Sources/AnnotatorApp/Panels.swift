@@ -10,6 +10,7 @@ import AnnotatorCore
     var permissionWindow: NSWindow?
     init(model: AppModel) { self.model = model }
     func permissions() {
+        menu?.orderOut(nil)
         if let permissionWindow { permissionWindow.makeKeyAndOrderFront(nil); NSApp.activate(); return }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 390), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Annotator permissions"; window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
@@ -129,10 +130,11 @@ struct PermissionsView: View {
 }
 struct MenuPanel: View {
     @Bindable var model: AppModel
+    @State private var contentHeight: CGFloat = 560
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitIconButton(.settings, help: "Settings") { model.navigate("settings") } }
+                HStack(spacing: 10) { AnnotatorMark(size: 28); VStack(alignment: .leading, spacing: 2) { Text("Annotator").font(.kitTitle); Text(model.state["health"]["title"].string).font(.kitDetail).foregroundStyle(.secondary) }; Spacer(); KitIconButton(.settings, help: "Settings") { model.navigate("settings") }.accessibilityLabel("Settings") }
                 Button { model.act("toggle_annotating") } label: { HStack { Text(model.state["annotating"].bool ? "Stop annotating" : "Annotate screen"); Spacer(); KitKeyCap(model.state["hotkey"]["display"].string) } }.buttonStyle(.kitPrimary)
                 if model.state["health"]["tone"].string == "error" { KitGroup { KitNotice(model.state["health"]["title"].string, tone: .error) } }
                 KitGroup("Recent annotations") {
@@ -149,9 +151,14 @@ struct MenuPanel: View {
                 HStack {
                     Button("Projects") { model.navigate("projects") }.buttonStyle(.kitSecondary)
                     Spacer()
-                    Menu { Button("Open server") { model.act("open_server") }; Button("Permissions…") { model.panels?.permissions() }; Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string("all")]) }; Divider(); Button("Quit Annotator") { NSApp.terminate(nil) } } label: { KitIconImage(.more, size: 14) }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 30)
+                    Menu { Button("Open server") { model.act("open_server") }; Button("Permissions…") { model.panels?.permissions() }; Button("Copy agent prompt") { model.act("copy_prompt", ["scope": .string("all")]) }; Divider(); Button("Quit Annotator") { NSApp.terminate(nil) } } label: { KitIconImage(.more, size: 14).foregroundStyle(.secondary).frame(width: 30, height: 28).contentShape(Rectangle()) }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).accessibilityLabel("More actions")
                 }
             }.padding(16)
-        }.frame(maxHeight: 620).background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        // A ScrollView has no intrinsic height. A maximum alone collapses MenuBarExtra
+        // to a strip; give its host a measured height and scroll only when needed.
+        .frame(width: 360, height: min(contentHeight, min(620, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
+        .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
     }
 }

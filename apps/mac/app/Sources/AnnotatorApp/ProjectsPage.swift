@@ -24,7 +24,7 @@ struct ProjectsPage: View {
                                 Button("Move up") { move(project, -1) }.disabled(model.projects.first == project)
                                 Button("Move down") { move(project, 1) }.disabled(model.projects.last == project)
                                 Button("Delete…", role: .destructive) { deleting = project }
-                            } label: { KitIconImage(.more, size: 13) }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 22)
+                            } label: { KitIconImage(.more, size: 13).foregroundStyle(.secondary).frame(width: 22, height: 28).contentShape(Rectangle()) }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).accessibilityLabel("Project actions")
                         }
                     }
                 }.disabled(!model.projectsError.isEmpty)
