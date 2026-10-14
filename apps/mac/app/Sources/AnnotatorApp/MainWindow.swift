@@ -36,8 +36,8 @@ struct MainWindow: View {
             }.padding(Kit.sidebarInset)
         }
     }
-    /// Half the difference between a list row (50 pt) and a sidebar row, so their centres meet.
-    static let rowOffset: CGFloat = 8
+    /// Half the difference between a list row (50 pt) and a sidebar row (31 pt), so their centres meet.
+    static let rowOffset: CGFloat = 9.5
     private func row(_ title: String, _ icon: KitIcon, _ page: String, _ count: Int?) -> some View {
         KitSidebarRow(title, icon: icon, count: count, selected: model.page == page || (page == "projects" && model.page.hasPrefix("project:"))) { model.navigate(page) }
     }
