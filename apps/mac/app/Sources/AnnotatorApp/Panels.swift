@@ -33,8 +33,7 @@ import AnnotatorCore
                 guard generation == commentGeneration else { return }
                 guard origin.array.count == 2 else { throw BridgeError("The comment panel could not be placed.") }
                 panel.setFrameOrigin(NSPoint(x: origin.array[0].double, y: origin.array[1].double))
-                panel.makeKeyAndOrderFront(nil); NSApp.activate()
-                NotificationCenter.default.post(name: .focusComment, object: nil)
+                focusComment()
                 if model.target["dictation"]["autoStart"].bool && !model.demo {
                     try? await Task.sleep(for: .milliseconds(200))
                     if generation == commentGeneration { model.startDictation() }
@@ -68,7 +67,7 @@ import AnnotatorCore
         panel.contentView = NSHostingView(rootView: CommentView(model: model).kitAppearance())
         commentPanel = panel; return panel
     }
-    func focusComment() { NSApp.activate(ignoringOtherApps: true); commentPanel?.makeKeyAndOrderFront(nil); NotificationCenter.default.post(name: .focusComment, object: nil) }
+    func focusComment() { model.hideLibraryForAnnotation(); NSApp.activate(ignoringOtherApps: true); commentPanel?.makeKeyAndOrderFront(nil); NotificationCenter.default.post(name: .focusComment, object: nil) }
 }
 final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true }; override var canBecomeMain: Bool { false } }
 extension Notification.Name { static let focusComment = Notification.Name("focus-comment") }
@@ -79,7 +78,7 @@ struct CommentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                AnnotatorMark(size: 26)
+                KitBrandMark(.annotator, size: 26).foregroundStyle(.primary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Annotate").font(.kitTitle)
                     Text(model.target["label"].string).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1).help(model.target["label"].string)
@@ -120,7 +119,7 @@ struct PermissionsView: View {
     @Bindable var model: AppModel
     var body: some View {
         VStack(spacing: 20) {
-            VStack(spacing: 8) { AnnotatorMark(); Text("Annotate anything on screen").font(.kitHeading); Text("Allow two permissions to select and capture UI.").font(.kitDetail).foregroundStyle(.secondary) }
+            VStack(spacing: 8) { KitBrandMark(.annotator, size: 34).foregroundStyle(.primary); Text("Annotate anything on screen").font(.kitHeading); Text("Allow two permissions to select and capture UI.").font(.kitDetail).foregroundStyle(.secondary) }
             KitGroup {
                 permission("Accessibility", "Read the element under your cursor.", "accessibility")
                 permission("Screen Recording", "Capture the area you annotate.", "screenRecording")

@@ -38,7 +38,7 @@ struct AnnotationDetail: View {
                     }
                 }
             } else {
-                VStack(spacing: 14) { AnnotatorMark(size: 46).opacity(0.12); Text(model.selected.isEmpty ? "No annotation selected" : "This annotation is no longer on the server.").font(.kitLabel).foregroundStyle(.secondary); KitKeyCap("⌘F") }
+                VStack(spacing: 14) { KitBrandMark(.annotator, size: 46).foregroundStyle(.primary).opacity(0.12); Text(model.selected.isEmpty ? "No annotation selected" : "This annotation is no longer on the server.").font(.kitLabel).foregroundStyle(.secondary); KitKeyCap("⌘F") }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

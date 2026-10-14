@@ -91,9 +91,11 @@ To keep verification builds under the ignored build folder, use Swift's
 `CARGO_TARGET_DIR="$PWD/build/rust"`. The smoke test accepts that Cargo target path;
 set `TMPDIR` to a directory under `build` for its isolated fixtures.
 
-The menu-bar label uses `pencil.tip.crop.circle` when idle and
-`pencil.tip.crop.circle.fill` while annotating, with the open queue count beside it.
-These native SF Symbols are Nick's requested exception to Heroicons in the app UI.
+The menu-bar label uses DesignKit’s supplied Annotator idle and active glyphs
+through `KitBrandImages.menuBarIcon`, with the open queue count beside it.
+The comment and permission panels use `KitBrandMark(.annotator)`. App icons
+come from DesignKit’s `BrandExport` (`SPECIMEN_EXPORT_BRANDS`) and `iconutil`;
+they use the same supplied mark. Generic edit icons remain action symbols.
 
 ## Operator and overlay recovery
 
@@ -137,3 +139,15 @@ selections and `KitHeaderSearchField` for active searches. Keep `KitPicker` for
 form rows. This requires DesignKit `34f2f5d` or a descendant; merge its
 `glass-header-picker` branch before this app's `glass-headers` branch.
 See [the header sweep](docs/glass-headers-verification.md) for coverage and checks.
+
+## Library window during capture
+
+The library stays hidden on launch and when capture starts. Comment and dictation
+focus must hide it before activating Annotator. A reopen request during capture or
+an open comment must leave it hidden. Explicit library/settings navigation still
+opens it; finishing or cancelling a comment does not restore it.
+
+Run `scripts/check-windows.sh` to check the real window lifecycle in light and dark
+with demo data. It verifies the frontmost app and editable key comment field,
+without starting the core or annotation server. Its comment images are offscreen
+renders; the window visibility and focus assertions use real AppKit windows.

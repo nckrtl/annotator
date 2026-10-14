@@ -16,6 +16,7 @@ import DesignKit
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: Kit.windowSize.width, height: Kit.windowSize.height)
         .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
         .commands {
             CommandGroup(replacing: .appSettings) { Button("Settings…") { model.navigate("settings") }.keyboardShortcut(",") }
             CommandGroup(after: .newItem) {
@@ -28,12 +29,14 @@ import DesignKit
                 .background(WindowOpener(model: model))
                 .onAppear { model.act("menu_opened") }
         } label: {
-            if let image = KitBrandImages.menuBarIcon(.annotator, variant: model.isAnnotating ? .active : .standard) {
-                Image(nsImage: image)
-                    .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
-            }
-            let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
-            if count > 0 { Text("\(count)") }
+            HStack {
+                if let image = KitBrandImages.menuBarIcon(.annotator, variant: model.isAnnotating ? .active : .standard) {
+                    Image(nsImage: image)
+                        .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
+                }
+                let count = model.state["queue"]["todo"].int + model.state["queue"]["inProgress"].int
+                if count > 0 { Text("\(count)") }
+            }.background(WindowOpener(model: model))
         }.menuBarExtraStyle(.window)
     }
 }
@@ -47,6 +50,9 @@ private struct WindowOpener: View {
         NSApp.setActivationPolicy(.accessory)
         AppModel.shared.start()
         #if DEBUG
+        if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_WINDOW_CHECK"] {
+            Task { await WindowCheck.run(AppModel.shared, directory: directory) }
+        }
         if let directory = ProcessInfo.processInfo.environment["ANNOTATOR_DICTATION_CHECK"] {
             Task { await DictationCheck.run(AppModel.shared, directory: directory) }
         }
@@ -60,7 +66,12 @@ private struct WindowOpener: View {
     }
     func applicationWillTerminate(_ notification: Notification) { AppModel.shared.bridge.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { AppModel.shared.navigate("all"); return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let model = AppModel.shared
+        guard !model.isAnnotating, model.panels?.commentPanel?.isVisible != true else { return false }
+        model.navigate("all")
+        return true
+    }
 }
 
 struct WindowReader: NSViewRepresentable {
