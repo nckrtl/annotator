@@ -22,11 +22,12 @@ bin=$(swift build --package-path app --scratch-path build/swift-app -c "$configu
 cp "$bin/Annotator" "$built/Contents/MacOS/Annotator"
 cp build/rust/"$configuration"/annotator "$built/Contents/Resources/annotator-core"
 helper="$built/Contents/Helpers/AnnotatorNative.app"
-mkdir -p "$helper/Contents/MacOS"
+mkdir -p "$helper/Contents/MacOS" "$helper/Contents/Resources"
 cp native/Helper-Info.plist "$helper/Contents/Info.plist"
 cp build/helpers/annotator-native "$helper/Contents/MacOS/annotator-native"
 rm -f "$built/Contents/Resources/annotator-native"
 cp src-tauri/icons/icon.icns "$built/Contents/Resources/Annotator.icns"
+cp "$built/Contents/Resources/Annotator.icns" "$helper/Contents/Resources/Annotator.icns"
 # SwiftPM's Xcode build backend emits resource bundles beside the executable.
 for bundle in "$bin"/*.bundle; do
   [[ -e "$bundle" ]] || continue

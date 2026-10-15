@@ -8,6 +8,8 @@
 	<string>com.nckrtl.annotator.native</string>
 	<key>CFBundleName</key>
 	<string>Annotator Capture</string>
+	<key>CFBundleIconFile</key>
+	<string>Annotator</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
