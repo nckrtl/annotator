@@ -56,6 +56,61 @@ import Testing
     #expect(calls.prefix(3) == ["start", "cancel", "start"])
     voice.cancel()
 }
+
+@MainActor @Test func previousCancellationDoesNotCancelTheNextRecording() async throws {
+    let voice = Dictation()
+    var cancelledAt = 0.0
+    var starts = 0
+    var finishCancellation: CheckedContinuation<Void, Never>?
+    voice.sleep = { _ in try await Task.sleep(for: .milliseconds(5)) }
+    voice.call = { action in
+        if action == "start" { starts += 1 }
+        if action == "cancel" {
+            await withCheckedContinuation { finishCancellation = $0 }
+            cancelledAt = Date().timeIntervalSince1970 * 1000
+        }
+        return .object(["result": .string("ok"), "status": .string("recording"), "cancelledAt": .number(cancelledAt)])
+    }
+    voice.start()
+    try await waitUntil { voice.phase == "recording" }
+    voice.cancel()
+    try await waitUntil { finishCancellation != nil }
+    voice.start()
+    try await Task.sleep(for: .milliseconds(20))
+    finishCancellation?.resume(); finishCancellation = nil
+    try await waitUntil { starts == 2 }
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(voice.phase == "recording")
+    #expect(voice.error == nil)
+    voice.cancel()
+    try await waitUntil { finishCancellation != nil }
+    finishCancellation?.resume()
+}
+
+@MainActor @Test func operatorCancellationKeepsTheDraftAndDoesNotSendAnotherCancel() async throws {
+    let voice = Dictation()
+    var calls: [String] = []
+    var released: [String] = []
+    var text = "Keep this draft"
+    voice.text = { text }
+    voice.releaseOverlay = { released.append($0) }
+    voice.sleep = { _ in try await Task.sleep(for: .milliseconds(5)) }
+    voice.call = { action in
+        calls.append(action)
+        return .object(["result": .string("ok"), "status": .string("ready"),
+                        "cancelledAt": .number(Date().timeIntervalSince1970 * 1000)])
+    }
+    voice.start()
+    try await waitUntil { voice.error != nil }
+    #expect(voice.phase == "idle")
+    #expect(voice.error?.contains("cancelled dictation") == true)
+    #expect(voice.text() == "Keep this draft")
+    #expect(released.contains("operator-cancelled"))
+    #expect(!calls.contains("cancel"))
+    text += ". Typed recovery."
+    try await voice.finish()
+    #expect(voice.error == nil)
+}
 @MainActor @Test func lostPasteDoesNotSubmit() async {
     let voice = Dictation(); voice.text = { "Unchanged" }
     voice.call = { _ in .object(["result": .string("ok")]) }

@@ -8,7 +8,6 @@ import Observation
     @ObservationIgnored public var call: (String) async throws -> JSON = { _ in .null }
     @ObservationIgnored public var text: () -> String = { "" }
     @ObservationIgnored public var focus: () async throws -> Void = {}
-    @ObservationIgnored public var requestClose: () -> Void = {}
     @ObservationIgnored public var releaseOverlay: (String) -> Void = { _ in }
     @ObservationIgnored public var reportError: (String) -> Void = { _ in }
     @ObservationIgnored public var sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
@@ -40,7 +39,7 @@ import Observation
     public func start() {
         guard phase == "idle" else { return }
         generation += 1; let session = generation
-        phase = "starting"; error = nil; before = text(); started = Date().timeIntervalSince1970 * 1000
+        phase = "starting"; error = nil; before = text()
         release("dictation-start")
         let priorCancellation = cancellation
         startTask = Task {
@@ -49,6 +48,9 @@ import Observation
             do {
                 try await focus()
                 guard session == generation else { return }
+                // The previous cancellation may finish while this start waits. Its timestamp
+                // belongs to the old recording, even when the user already opened a new comment.
+                started = Date().timeIntervalSince1970 * 1000
                 try check(try await request("start"))
                 guard session == generation else { return }
                 phase = "recording"
@@ -120,7 +122,12 @@ import Observation
                 guard !Task.isCancelled else { return }
                 let reply = try await request("status")
                 guard session == generation, !Task.isCancelled else { return }
-                if reply["cancelledAt"].double >= started { cancel(); requestClose(); return }
+                if reply["cancelledAt"].double >= started {
+                    generation += 1; phase = "idle"
+                    error = "Operator cancelled dictation. Type your comment or try again."
+                    release("operator-cancelled")
+                    return
+                }
                 try check(reply)
                 let state = reply["status"].string
                 guard ["starting", "idle", "ready", "loading", "arming", "recording", "transcribing"].contains(state) else {

@@ -57,7 +57,6 @@ import AnnotatorCore
             try await panels.prepareDictation()
         }
         voice.releaseOverlay = { [weak self] _ in self?.releaseOverlay() }
-        voice.requestClose = { [weak self] in self?.cancelComment() }
         voice.reportError = { [weak self] in self?.commentError = $0 }
         if demo { Demo.populate(self); return }
         bridge.onEvent = { [weak self] event, value in self?.event(event, value) }

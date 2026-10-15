@@ -143,4 +143,26 @@ mod tests {
         let origin = comment_origin(Rect::new(-1000.0, 0.0, 100.0, 100.0), &screens(), (0.0, 0.0), (380.0, 200.0));
         assert_eq!(origin, (-1000.0, 882.0 - 200.0 - 8.0));
     }
+
+    #[test]
+    fn panel_stays_on_the_target_display_in_each_arrangement() {
+        for frame in [
+            Rect::new(-1920.0, 0.0, 1920.0, 1080.0),
+            Rect::new(1512.0, 0.0, 1920.0, 1080.0),
+            Rect::new(0.0, 982.0, 2560.0, 1440.0),
+            Rect::new(0.0, -1080.0, 1920.0, 1080.0),
+        ] {
+            let mut displays = screens();
+            let visible = Rect::new(frame.x, frame.y, frame.width, frame.height - 33.0);
+            displays[1] = Screen { frame, visible };
+            for y in [visible.y + 10.0, visible.max_y() - 40.0] {
+                let target = Rect::new(visible.x + 100.0, y, 200.0, 30.0);
+                let origin = comment_origin(top_left_from_appkit(target, MAIN), &displays,
+                    (target.mid_x(), target.mid_y()), (420.0, 240.0));
+                assert!(visible.contains(origin.0, origin.1), "{frame:?}: {origin:?}");
+                assert!(origin.0 + 420.0 <= visible.max_x());
+                assert!(origin.1 + 240.0 <= visible.max_y());
+            }
+        }
+    }
 }
