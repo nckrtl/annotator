@@ -12,6 +12,7 @@ mod panels;
 mod pending;
 mod projects;
 mod queue;
+mod retention;
 mod service_url;
 mod settings;
 #[cfg(test)]

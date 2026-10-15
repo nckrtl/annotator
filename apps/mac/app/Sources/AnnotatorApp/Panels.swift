@@ -218,7 +218,7 @@ struct MenuPanel: View {
     /// A search field across the header, and one ⋯ menu that holds the app’s actions.
     private var header: some View {
         HStack(spacing: Kit.Space.m) {
-            KitHeaderSearchField(text: $query, prompt: "Search annotations") {}
+            KitHeaderSearchField(text: $query, prompt: "Search annotations", showsSeparator: false) {}
             KitToolbarGroup {
                 KitToolbarMenu(help: "More") {
                     Button("Open Annotator") { model.navigate("all") }

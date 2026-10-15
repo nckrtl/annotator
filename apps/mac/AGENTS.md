@@ -103,6 +103,13 @@ helper. Read this file before you change it.
 
 ## Annotation server contract
 
+Nick, 2026-10-15: On launch and hourly, the Rust core deletes finished (`done`)
+annotations older than 24 hours from every project on the configured server,
+including Conn and T3 Code. Use `completedAt`, or `createdAt` only when completion
+time is absent. Never automatically delete todo, in-progress or question records.
+Validate the server identity, use `DELETE <base>/<id>`, and log counts and annotation
+numbers without comment text. Retention tests use temporary servers, never live data.
+
 Default base URL: `http://127.0.0.1:29703/annotations`, configurable in
 settings. Run a server for development with:
 

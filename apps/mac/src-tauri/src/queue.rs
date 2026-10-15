@@ -94,8 +94,30 @@ impl QueueMonitor {
     }
 
     async fn run(&self, client: AnnotationClient, generation: u64) {
+        tokio::select! {
+            _ = self.run_connection(&client, generation) => {},
+            _ = self.retain_recent(&client, generation) => {},
+        }
+    }
+
+    async fn retain_recent(&self, client: &AnnotationClient, generation: u64) {
         loop {
-            self.listen(&client, generation).await;
+            if !self.current(generation) { return; }
+            match crate::retention::prune(client, chrono::Utc::now().timestamp_millis()).await {
+                Ok(report) => {
+                    crate::log(&format!("Retention deleted count={} numbers={:?}; failed count={} numbers={:?}",
+                        report.deleted.len(), report.deleted, report.failed.len(), report.failed));
+                    if !report.deleted.is_empty() { self.refresh(client, generation).await; }
+                }
+                Err(error) => crate::log(&format!("Retention failed: {error}")),
+            }
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    }
+
+    async fn run_connection(&self, client: &AnnotationClient, generation: u64) {
+        loop {
+            self.listen(client, generation).await;
             // A server that is not the annotation server will not become one by being asked again.
             // A new URL starts a new run.
             if self.wrong_server() {
@@ -107,7 +129,7 @@ impl QueueMonitor {
                 if !self.current(generation) || self.wrong_server() {
                     return;
                 }
-                let recovered = self.refresh(&client, generation).await;
+                let recovered = self.refresh(client, generation).await;
                 if self.wrong_server() {
                     return;
                 }
@@ -296,7 +318,7 @@ mod tests {
         let server = serve(vec![Reply::new(404, ""), Reply::new(200, r#"{"data":[]}"#)]);
         let (monitor, _) = monitor();
         let run = tokio::time::timeout(Duration::from_secs(10),
-            monitor.run(AnnotationClient::new(server.url("/annotations")), 0)).await;
+            monitor.run_connection(&AnnotationClient::new(server.url("/annotations")), 0)).await;
         assert!(run.is_ok(), "the run kept polling");
         assert_eq!(monitor.connection(), Connection::WrongServer);
         assert_eq!(server.paths().len(), 2);
