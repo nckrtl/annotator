@@ -61,7 +61,7 @@ final class OverlayController {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.isVisible else { return }
+                guard let self, self.isVisible || self.preparing else { return }
                 self.hide()
                 self.show()
             }
@@ -208,7 +208,9 @@ final class OverlayController {
                 guard let point = queuedPoint else { break }
                 queuedPoint = nil
                 lastHitTest = Date()
+                let session = generation
                 let target = await resolve(point, dom: false)
+                guard session == generation else { continue }
                 if case .hovering = state {
                     state = .hovering(target)
                     redraw()

@@ -81,6 +81,9 @@ final class AXReader: @unchecked Sendable {
         let owner = info[kCGWindowOwnerName as String] as? String
         if owner == "Window Server" { return nil }
         let bundle = AXReader.bundle(of: pid)
+        if (info[kCGWindowLayer as String] as? Int) == Int(CGWindowLevelForKey(.mainMenuWindow)),
+            WindowRules.isScreenshotCanvas(bundleID: bundle?.bundleIdentifier, frame: bounds, displays: displayFrames())
+        { return nil }
         let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
             ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
             ?? owner ?? "Unknown"
@@ -88,6 +91,15 @@ final class AXReader: @unchecked Sendable {
         let title = info[kCGWindowName as String] as? String
         return FoundWindow(
             app: app, window: WindowInfo(title: title, id: number, frame: bounds), bundleURL: bundle?.bundleURL)
+    }
+
+    /// Query WindowServer each time; a display can disappear or change scale while we run.
+    private func displayFrames() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success else { return [] }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return [] }
+        return displays.prefix(Int(count)).map { CGDisplayBounds($0) }
     }
 
     /// The windows on screen, front to back. The focused app's focused window and open menus and flyouts

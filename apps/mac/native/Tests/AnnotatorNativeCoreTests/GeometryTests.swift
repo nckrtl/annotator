@@ -39,6 +39,23 @@ struct GeometryTests {
         #expect(Geometry.topLeft(fromAppKit: appKit, mainScreenHeight: mainHeight) == rect)
     }
 
+    @Test func displayChangesKeepHitTestsInPoints() {
+        // External XDR, built-in Retina and a 1x VM mode. Menu bars/notches do not
+        // change the full display height used for the global coordinate conversion.
+        for (height, scale) in [(1692.0, 2.0), (1117.0, 2.0), (768.0, 1.0)] {
+            for origin in [CGPoint.zero, CGPoint(x: -1920, y: -200), CGPoint(x: 0, y: height)] {
+                let frame = CGRect(x: origin.x + 40, y: origin.y + 100, width: 180, height: 24)
+                let point = CGPoint(x: frame.midX, y: frame.midY)
+                let mapped = Geometry.topLeft(fromAppKit: frame, mainScreenHeight: height)
+                #expect(mapped.contains(Geometry.topLeft(fromAppKit: point, mainScreenHeight: height)))
+                #expect(Geometry.appKit(fromTopLeft: mapped, mainScreenHeight: height) == frame)
+                let pixels = Geometry.pixelSize(of: mapped, scale: scale)
+                let expectedWidth = frame.width * CGFloat(scale)
+                #expect(pixels.width == expectedWidth)
+            }
+        }
+    }
+
     @Test func captureRectAddsMarginAndClips() {
         let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let r = Geometry.captureRect(for: CGRect(x: 10, y: 100, width: 50, height: 20), margin: 24, display: display)
