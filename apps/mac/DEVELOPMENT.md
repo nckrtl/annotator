@@ -114,12 +114,12 @@ needs its helpers, models, Accessibility permission, and an unlocked desktop.
 Selection now ends when a target is picked. Its helper removes all full-screen
 panels before awaiting capture. The comment stays editable after dictation errors.
 Escape closes it and ends selection; it does not return to the full-screen overlay.
-See AGENTS.md for deadlines, migration and diagnostic log locations.
+See AGENTS.md for deadlines and diagnostic log locations.
 
 The historical `src-tauri` directory is live Rust code, not a retired Tauri UI.
-`main.rs` declares `ofide.rs`, `commands.rs` dispatches its API calls, and the native
-SwiftUI app runs that executable. No dead Tauri dictation source was found or deleted.
-The internal command/module name and `X-Ofide-Token` wire header remain unchanged.
+`main.rs` declares `operator.rs`, `commands.rs` dispatches its API calls as the
+`operator` command, and the native SwiftUI app runs that executable. Requests carry
+the `X-Operator-Token` header.
 
 For layout review while ScreenCaptureKit is unavailable, a debug demo can set
 `ANNOTATOR_UI_OFFSCREEN=1` with `ANNOTATOR_UI_SNAPSHOTS`. This uses AppKit's view

@@ -277,7 +277,7 @@ import Testing
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.path)
     let bridge = Bridge(), voice = Dictation(); var releases: [String] = []
     try bridge.start(executable: fixture)
-    voice.call = { try await bridge.request("ofide", .object(["action": .string($0)])) }
+    voice.call = { try await bridge.request("operator", .object(["action": .string($0)])) }
     voice.releaseOverlay = { releases.append($0) }
     voice.start()
     try await waitUntil { voice.error != nil }

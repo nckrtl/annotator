@@ -139,10 +139,10 @@ Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|
 `hide_menu`, `quit_app`.
 
 Comment: `submit_comment {text}` (closes the panel at once, posts in the background),
-`cancel_comment`, `comment_finish_done {submit, text}`, `ofide {action: "status"|"start"|"stop"|"cancel"}`
-(proxies the live `src-tauri/src/ofide.rs`; returns its JSON or an error string).
+`cancel_comment`, `comment_finish_done {submit, text}`, `operator {action: "status"|"start"|"stop"|"cancel"}`
+(proxies the live `src-tauri/src/operator.rs`; returns its JSON or an error string).
 `release_overlay` preserves the draft and ends selection. `stop_annotating` also
-closes the comment. The internal `ofide` command name is retained.
+closes the comment.
 
 Settings: `get_settings`, `save_settings {settings}` (re-registers the hotkey, restarts the queue
 when the URL changed), `hotkey_recording {recording: bool}` (unregister the toggle hotkey while the

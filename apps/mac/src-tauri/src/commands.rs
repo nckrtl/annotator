@@ -3,7 +3,7 @@
 use crate::app::{self, shared};
 use crate::projects::{agent_prompt, Routes, Scope};
 use crate::settings::{home, Settings};
-use crate::{helper, ofide, panels, windows};
+use crate::{helper, operator, panels, windows};
 use serde_json::{json, Value};
 use crate::runtime::AppHandle;
 
@@ -107,12 +107,12 @@ pub fn resize_comment(app: AppHandle, height: f64) {
 }
 
 /// Proxies Operator's Local API: `status`, `start`, `stop` or `cancel`. Rejects only for setup errors.
-pub async fn ofide(app: AppHandle, action: String) -> Result<Value, String> {
+pub async fn operator(app: AppHandle, action: String) -> Result<Value, String> {
     let settings = app::settings(&app);
-    let base = settings.ofide().ok_or("The Operator URL in Settings is not valid.")?;
-    let token = ofide::read_token(&ofide::token_file(crate::settings::OFIDE, &home()))?;
-    let client = ofide::OperatorClient::new(base, token);
-    let answer = shared(&app).ofide.run(&client, &action).await?;
+    let base = settings.operator().ok_or("The Operator URL in Settings is not valid.")?;
+    let token = operator::read_token(&operator::token_file(crate::settings::OPERATOR, &home()))?;
+    let client = operator::OperatorClient::new(base, token);
+    let answer = shared(&app).operator.run(&client, &action).await?;
     if action != "status" {
         crate::log(&format!("Operator {action}: {}", answer.result.name()));
     }
@@ -238,7 +238,7 @@ pub async fn dispatch(app: AppHandle, command: &str, args: Value) -> Result<Valu
 "cancel_comment" => {  serde_json::to_value(cancel_comment(app.clone())).map_err(|e| e.to_string()) },
 "comment_finish_done" => { let submit: bool = serde_json::from_value(args["submit"].clone()).map_err(|e| format!("submit: {e}"))?; let text: String = serde_json::from_value(args["text"].clone()).map_err(|e| format!("text: {e}"))?; let keep: Option<bool> = serde_json::from_value(args["keep"].clone()).map_err(|e| format!("keep: {e}"))?; serde_json::to_value(comment_finish_done(app.clone(), submit, text, keep)).map_err(|e| e.to_string()) },
 "resize_comment" => { let height: f64 = serde_json::from_value(args["height"].clone()).map_err(|e| format!("height: {e}"))?; serde_json::to_value(resize_comment(app.clone(), height)).map_err(|e| e.to_string()) },
-"ofide" => { let action: String = serde_json::from_value(args["action"].clone()).map_err(|e| format!("action: {e}"))?; serde_json::to_value(ofide(app.clone(), action).await?).map_err(|e| e.to_string()) },
+"operator" => { let action: String = serde_json::from_value(args["action"].clone()).map_err(|e| format!("action: {e}"))?; serde_json::to_value(operator(app.clone(), action).await?).map_err(|e| e.to_string()) },
 "alert" => { let title: String = serde_json::from_value(args["title"].clone()).map_err(|e| format!("title: {e}"))?; let message: String = serde_json::from_value(args["message"].clone()).map_err(|e| format!("message: {e}"))?; serde_json::to_value(alert(app.clone(), title, message)).map_err(|e| e.to_string()) },
 "get_settings" => {  serde_json::to_value(get_settings(app.clone())).map_err(|e| e.to_string()) },
 "save_settings" => { let settings: Settings = serde_json::from_value(args["settings"].clone()).map_err(|e| format!("settings: {e}"))?; serde_json::to_value(save_settings(app.clone(), settings)?).map_err(|e| e.to_string()) },

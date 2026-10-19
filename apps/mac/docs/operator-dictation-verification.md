@@ -57,10 +57,10 @@ late-response rejection, cancellation cleanup and bounded step logs. The helper'
 15 s inactivity watchdog closes its panels; a background backstop exits the helper
 one second later if its main actor cannot run. Parent exit and EOF remove it too.
 
-The live Rust code under `src-tauri` remains. `main.rs` includes `ofide.rs`, and
-`commands.rs` calls it for the SwiftUI host. No dead Tauri dictation files were
-found or deleted. Wire identities remain unchanged. Settings migrate the old
-boolean choices, remove app/URL choices and preserve unrelated stored fields.
+The live Rust code under `src-tauri` remains. `main.rs` includes `operator.rs`, and
+`commands.rs` calls it for the SwiftUI host. It reads the token from
+`com.nckrtl.operator/control.json` and sends it as `X-Operator-Token`. Settings store
+`operatorEnabled` and `operatorAutoStart`.
 
 Verification includes fake HTTP silence/409/401/500/504 replies, slow/no reply,
 dropped response bodies, malformed status and HTTP-200 worker errors; Swift tests

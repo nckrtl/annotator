@@ -50,7 +50,7 @@ import AnnotatorCore
     var filtered: [JSON] { AnnotationCollection.items(items, page: page, projects: projects, search: search) }
     func start() {
         panels = Panels(model: self); hotkeys = Hotkeys(model: self)
-        voice.call = { [weak self] action in guard let self else { throw CancellationError() }; return try await self.call("ofide", ["action": .string(action)]) }
+        voice.call = { [weak self] action in guard let self else { throw CancellationError() }; return try await self.call("operator", ["action": .string(action)]) }
         voice.text = { [weak self] in self?.comment ?? "" }
         voice.focus = { [weak self] in
             guard let panels = self?.panels else { throw CancellationError() }

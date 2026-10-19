@@ -31,7 +31,7 @@ with open(plist_path, "rb") as f:
     defaults = plistlib.load(f)
 
 settings = {}
-for key in ["serverAutoStart", "serverURL", "ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp"]:
+for key in ["serverAutoStart", "serverURL", "operatorEnabled", "operatorAutoStart"]:
     if key in defaults:
         settings[key] = defaults[key]
 

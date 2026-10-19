@@ -7,7 +7,7 @@ mod helper;
 mod hotkey;
 mod http;
 mod local_server;
-mod ofide;
+mod operator;
 mod panels;
 mod pending;
 mod projects;

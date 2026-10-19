@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:29703/annotations";
-pub const OFIDE: &str = "com.nckrtl.ofide";
+pub const OPERATOR: &str = "com.nckrtl.operator";
 pub const OPERATOR_URL: &str = "http://127.0.0.1:12321";
 
 /// Carbon modifier flags, as `RegisterEventHotKey` takes them.
@@ -88,10 +88,10 @@ pub struct Settings {
     pub server_auto_start: bool,
     #[serde(rename = "serverURL")]
     pub server_url: String,
-    #[serde(rename = "operatorEnabled", alias = "ofideEnabled")]
-    pub ofide_enabled: bool,
-    #[serde(rename = "operatorAutoStart", alias = "ofideAutoStart")]
-    pub ofide_auto_start: bool,
+    #[serde(rename = "operatorEnabled")]
+    pub operator_enabled: bool,
+    #[serde(rename = "operatorAutoStart")]
+    pub operator_auto_start: bool,
     pub hotkey: Hotkey,
 }
 
@@ -100,8 +100,8 @@ impl Default for Settings {
         Settings {
             server_auto_start: true,
             server_url: DEFAULT_SERVER_URL.into(),
-            ofide_enabled: true,
-            ofide_auto_start: true,
+            operator_enabled: true,
+            operator_auto_start: true,
             hotkey: Hotkey::STANDARD,
         }
     }
@@ -125,29 +125,14 @@ impl Settings {
     }
 
     /// Operator carries the Local API token, so its URL must be on this machine.
-    pub fn ofide(&self) -> Option<url::Url> {
+    pub fn operator(&self) -> Option<url::Url> {
         service_url::loopback(OPERATOR_URL)
     }
 
     /// A missing file gives the defaults. A broken file is kept aside, so it is never lost silently.
     pub fn load(file: &Path) -> Settings {
         let Ok(data) = std::fs::read(file) else { return Settings::default() };
-        let parsed = (|| -> Result<Settings, serde_json::Error> {
-            let mut value: serde_json::Value = serde_json::from_slice(&data)?;
-            let original = value.clone();
-            if let Some(fields) = value.as_object_mut() {
-                for (old, new) in [("ofideEnabled", "operatorEnabled"), ("ofideAutoStart", "operatorAutoStart")] {
-                    if let Some(choice) = fields.remove(old) { fields.entry(new).or_insert(choice); }
-                }
-                fields.remove("ofideApp"); fields.remove("ofideURL");
-            }
-            let settings = serde_json::from_value(value.clone())?;
-            if value != original {
-                // Keep unrelated/unknown preferences; only the retired dictation keys migrate.
-                if let Err(error) = write_atomic(file, &serde_json::to_vec_pretty(&value)?) { crate::log(&error); }
-            }
-            Ok(settings)
-        })();
+        let parsed = serde_json::from_slice::<Settings>(&data);
         match parsed {
             Ok(settings) => settings,
             Err(error) => {
@@ -189,23 +174,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migrates_retired_app_without_losing_choices() {
+    fn loads_operator_choices() {
         for enabled in [false, true] {
-            let dir = crate::testutil::temp_dir("operator-migration");
+            let dir = crate::testutil::temp_dir("operator-settings");
             let file = dir.join("settings.json");
             write_atomic(&file, serde_json::json!({
-                "ofideEnabled": enabled, "ofideAutoStart": false,
-                "ofideURL": "http://127.0.0.1:12322", "ofideApp": "com.nckrtl.ofide.dev",
-                "t3Nudge": true, "unusedAppearance": "keep"
+                "operatorEnabled": enabled, "operatorAutoStart": false,
             }).to_string().as_bytes()).unwrap();
             let settings = Settings::load(&file);
-            assert_eq!(settings.ofide_enabled, enabled);
-            assert!(!settings.ofide_auto_start);
-            assert_eq!(settings.ofide().unwrap().as_str(), "http://127.0.0.1:12321/");
+            assert_eq!(settings.operator_enabled, enabled);
+            assert!(!settings.operator_auto_start);
+            assert_eq!(settings.operator().unwrap().as_str(), "http://127.0.0.1:12321/");
+            settings.save(&file).unwrap();
             let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
             assert_eq!(saved["operatorEnabled"], enabled);
-            assert_eq!(saved["unusedAppearance"], "keep");
-            for old in ["ofideEnabled", "ofideAutoStart", "ofideURL", "ofideApp"] { assert!(saved.get(old).is_none()); }
+            assert_eq!(saved["operatorAutoStart"], false);
             assert_eq!(Settings::load(&file), settings);
             std::fs::remove_dir_all(dir).unwrap();
         }

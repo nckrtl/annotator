@@ -176,11 +176,10 @@ existing agents already read; keep their meaning. The `native` object is new.
 
 ## Dictation
 
-Operator is the only dictation app. Its held identity is `com.nckrtl.ofide`, its
-Local API is fixed at `http://127.0.0.1:12321`, and its token stays in
-`~/Library/Application Support/com.nckrtl.ofide/control.json`. Never select the
-retired Dev app or send that token to another endpoint. The `X-Ofide-Token` header
-is part of the existing API and keeps its name.
+Operator is the only dictation app. Its bundle ID is `com.nckrtl.operator`, its
+Local API is fixed at `http://127.0.0.1:12321`, and its token is in
+`~/Library/Application Support/com.nckrtl.operator/control.json`. Annotator sends
+the token in the `X-Operator-Token` header. Never send that token to another endpoint.
 
 `POST /dictate/start` with `{"paste":true}` starts recording; `/dictate-stop`
 waits for paste dispatch (200), no dictation/focus change (409), or silence (422).
@@ -203,10 +202,8 @@ or transcription at 20 s, and a recording at 120 s. The helper closes after 15 s
 without input, with a background exit backstop after one more second if its main
 actor cannot run. EOF and parent exit also stop the helper.
 
-`operatorEnabled` and `operatorAutoStart` preserve the old `ofideEnabled` and
-`ofideAutoStart` choices. Loading settings writes the new keys and discards the
-old app/URL keys, including saved Dev endpoints. No app picker or editable API URL
-remains. Dictation steps and overlay-release reasons go to `dictation.log` and
+Settings store the dictation choices as `operatorEnabled` and `operatorAutoStart`.
+There is no app picker or editable API URL. Dictation steps and overlay-release reasons go to `dictation.log` and
 `overlay.log` under Annotator's Application Support folder, with bounded file sizes.
 They contain step codes and focus PIDs, never tokens, response bodies, or comment text.
 

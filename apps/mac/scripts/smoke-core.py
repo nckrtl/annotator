@@ -36,7 +36,7 @@ def main():
         settings_dir.mkdir(parents=True)
         (settings_dir / 'settings.json').write_text(json.dumps({
             'serverURL': base, 'serverAutoStart': False, 't3Enabled': False, 't3Nudge': True,
-            'ofideEnabled': False, 'ofideAutoStart': False,
+            'operatorEnabled': False, 'operatorAutoStart': False,
         }))
         helper = temp / 'helper.py'
         helper.write_text('''#!/usr/bin/env python3

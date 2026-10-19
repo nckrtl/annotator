@@ -8,5 +8,5 @@ are Mac-only. Menu glyphs use template rendering; Operator and Annotator have
 separate idle and active artwork.
 
 To refresh assets, export from the DesignKit Playground and run its
-`scripts/sync-app-icons.py <export-directory> --operator <ofide-repo>` (or
+`scripts/sync-app-icons.py <export-directory> --operator <operator-repo>` (or
 `--vault`, `--spaces`, `--annotator`). This command does not build or install.

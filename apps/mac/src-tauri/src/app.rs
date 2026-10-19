@@ -5,7 +5,7 @@ use crate::annotations::{without_screenshot, AnnotationClient, Item};
 use crate::geometry::Rect;
 use crate::hotkey::{self, Slot};
 use crate::local_server::{self, LocalServer};
-use crate::ofide::OperatorQueue;
+use crate::operator::OperatorQueue;
 use crate::pending::{PendingStore, Submitter};
 use crate::projects::{ProjectsStore, Routes};
 use crate::queue::{Connection, QueueMonitor};
@@ -66,7 +66,7 @@ pub struct Shared {
     pub core: Mutex<Core>,
     pub queue: Arc<QueueMonitor>,
     pub submitter: Arc<Submitter>,
-    pub ofide: OperatorQueue,
+    pub operator: OperatorQueue,
     pub permission_waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Permissions>>>,
 }
 
@@ -122,7 +122,7 @@ pub fn setup(app: &crate::runtime::AppHandle) {
         }),
         queue,
         submitter,
-        ofide: OperatorQueue::default(),
+        operator: OperatorQueue::default(),
         permission_waiters: Mutex::default(),
     });
 
@@ -534,8 +534,8 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
         return;
     }
     release_overlay(app);
-    let dictation = settings.ofide_enabled.then(|| json!({
-        "autoStart": settings.ofide_auto_start,
+    let dictation = settings.operator_enabled.then(|| json!({
+        "autoStart": settings.operator_auto_start,
     }));
     let target = json!({
         "label": event["label"].as_str().unwrap_or_default(),

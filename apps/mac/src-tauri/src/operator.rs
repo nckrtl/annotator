@@ -1,4 +1,4 @@
-//! Operator's local dictation API (native Operator contract). See `~/apps/ofide/README.md`.
+//! Operator's local dictation API (native Operator contract). See `~/apps/operator/README.md`.
 //! `start` and `cancel` run one after another, so a late cancel never stops a new recording.
 
 use crate::annotations::{error_message, status_text};
@@ -32,7 +32,7 @@ impl OperatorResult {
     }
 }
 
-/// Where Operator keeps its Local API token. The production identity remains `com.nckrtl.ofide`.
+/// Where Operator keeps its Local API token. Its identity is `com.nckrtl.operator`.
 pub fn token_file(bundle_id: &str, home: &Path) -> PathBuf {
     home.join(format!("Library/Application Support/{bundle_id}/control.json"))
 }
@@ -88,7 +88,7 @@ impl OperatorClient {
     }
 
     async fn send(&self, request: reqwest::RequestBuilder) -> (OperatorResult, Option<Vec<u8>>) {
-        let response = match request.header("X-Ofide-Token", &self.token).send().await {
+        let response = match request.header("X-Operator-Token", &self.token).send().await {
             Ok(response) => response,
             Err(_) => return (OperatorResult::NotRunning, None),
         };
@@ -248,16 +248,16 @@ mod tests {
     #[tokio::test]
     async fn paths_and_token() {
         let server = serve(vec![Reply::new(202, "")]);
-        let ofide = client(server.url(""));
-        ofide.start().await;
-        ofide.stop().await;
-        ofide.cancel().await;
+        let operator = client(server.url(""));
+        operator.start().await;
+        operator.stop().await;
+        operator.cancel().await;
         assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel"]);
         assert_eq!(serde_json::from_slice::<Value>(&server.request(0).body).unwrap(), json!({"paste": true}));
         for index in 0..3 {
             let request = server.request(index);
             assert_eq!(request.method, "POST");
-            assert_eq!(request.header("x-ofide-token"), Some("t"));
+            assert_eq!(request.header("x-operator-token"), Some("t"));
         }
     }
 
@@ -268,14 +268,14 @@ mod tests {
         assert_eq!(answer.result, OperatorResult::Ok);
         assert_eq!(answer.status.as_deref(), Some("ready"));
         assert_eq!(answer.cancelled_at, Some(1791400000000.0));
-        assert_eq!(server.request(0).header("x-ofide-token"), Some("t"));
+        assert_eq!(server.request(0).header("x-operator-token"), Some("t"));
         assert_eq!(client(closed_url("")).status().await.status, None);
     }
 
     #[test]
     fn reads_the_token() {
-        let home = temp_dir("ofide");
-        let file = token_file("com.nckrtl.ofide", &home);
+        let home = temp_dir("operator");
+        let file = token_file("com.nckrtl.operator", &home);
         assert_eq!(read_token(&file).unwrap_err(),
             format!("No Operator Local API token at {}. Turn on Local API in Operator → Settings.", file.display()));
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -288,25 +288,25 @@ mod tests {
     #[tokio::test]
     async fn cancel_waits_for_the_start_and_goes_out_once() {
         let server = serve(vec![Reply::new(202, "").delayed(300), Reply::new(202, "")]);
-        let ofide = client(server.url(""));
+        let operator = client(server.url(""));
         let queue = Arc::new(OperatorQueue::default());
-        let (q, c) = (queue.clone(), ofide.clone());
+        let (q, c) = (queue.clone(), operator.clone());
         let start = tokio::spawn(async move { q.run(&c, "start").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let cancel = queue.run(&ofide, "cancel").await.unwrap();
+        let cancel = queue.run(&operator, "cancel").await.unwrap();
         assert_eq!(cancel.result, OperatorResult::Ok);
         assert_eq!(start.await.unwrap().unwrap().result, OperatorResult::Ok);
-        assert_eq!(queue.run(&ofide, "cancel").await.unwrap().result, OperatorResult::Ok);
+        assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
         assert_eq!(server.paths(), ["/dictate/start", "/dictate/cancel"]);
     }
 
     #[tokio::test]
     async fn no_cancel_after_a_start_without_dictation() {
         let server = serve(vec![Reply::new(409, "")]);
-        let ofide = client(server.url(""));
+        let operator = client(server.url(""));
         let queue = OperatorQueue::default();
-        assert_eq!(queue.run(&ofide, "start").await.unwrap().result, OperatorResult::NoDictation);
-        assert_eq!(queue.run(&ofide, "cancel").await.unwrap().result, OperatorResult::Ok);
+        assert_eq!(queue.run(&operator, "start").await.unwrap().result, OperatorResult::NoDictation);
+        assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
         assert_eq!(server.paths(), ["/dictate/start"]);
     }
 }
