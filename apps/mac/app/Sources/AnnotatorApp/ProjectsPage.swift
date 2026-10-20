@@ -23,7 +23,7 @@ struct ProjectsPage: View {
                     .id(project["id"].string)
             } else {
                 VStack(spacing: 14) {
-                    KitBrandMark(.annotator, size: 46).foregroundStyle(.primary).opacity(0.12)
+                    AnnotatorMark( size: 46).foregroundStyle(.primary).opacity(0.12)
                     Text("No project selected").font(.kitLabel).foregroundStyle(.tertiary)
                     HStack(spacing: 6) { KitKeyCap("⌘F"); Text("to search").font(.kitLabel).foregroundStyle(.tertiary) }
                 }.padding(.bottom, 40).frame(maxWidth: .infinity, maxHeight: .infinity)

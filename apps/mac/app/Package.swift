@@ -5,6 +5,6 @@ let package = Package(name: "AnnotatorApp", platforms: [.macOS(.v26)], products:
     .package(path: ProcessInfo.processInfo.environment["DESIGN_KIT_PATH"] ?? "../../../../design-kit/DesignKit")
 ], targets: [
     .target(name: "AnnotatorCore"),
-    .executableTarget(name: "AnnotatorApp", dependencies: ["AnnotatorCore", "DesignKit"]),
+    .executableTarget(name: "AnnotatorApp", dependencies: ["AnnotatorCore", "DesignKit"], resources: [.process("Resources")]),
     .testTarget(name: "AnnotatorCoreTests", dependencies: ["AnnotatorCore"])
 ])

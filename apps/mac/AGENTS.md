@@ -247,8 +247,9 @@ use another checkout. Do not copy its controls into this repository.
 - No Mac surface is a web page, so Tauri and React are removed from the Mac app.
 - Notices always sit inside a `KitGroup`, with primary text. Only the icon
   carries warning or error color; never use tinted notice boxes.
-- Identity: use DesignKit’s supplied Annotator mark, including in the comment
-  and permission panels. Do not redraw the logo with a generic edit icon.
+- Identity: use the supplied Annotator mark (`AnnotatorMark`, with its assets in
+  `app/Sources/AnnotatorApp/Resources`), including in the comment and permission
+  panels. Do not redraw the logo with a generic edit icon.
   Numbered tiles recur in the library. Controls and shell come from DesignKit.
 
 ```

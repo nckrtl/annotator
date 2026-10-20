@@ -91,9 +91,10 @@ To keep verification builds under the ignored build folder, use Swift's
 `CARGO_TARGET_DIR="$PWD/build/rust"`. The smoke test accepts that Cargo target path;
 set `TMPDIR` to a directory under `build` for its isolated fixtures.
 
-The menu-bar label uses DesignKit’s supplied Annotator idle and active glyphs
-through `KitBrandImages.menuBarIcon`, with the open queue count beside it.
-The comment and permission panels use `KitBrandMark(.annotator)`. App icons
+The menu-bar label uses the supplied Annotator idle and active glyphs
+through `AnnotatorMenuBarIcon`, with the open queue count beside it.
+The comment and permission panels use `AnnotatorMark`. Both live in
+`app/Sources/AnnotatorApp` with their assets. App icons
 come from DesignKit’s `BrandExport` (`SPECIMEN_EXPORT_BRANDS`) and `iconutil`;
 they use the same supplied mark. Generic edit icons remain action symbols.
 

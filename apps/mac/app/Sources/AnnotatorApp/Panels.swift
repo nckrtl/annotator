@@ -131,7 +131,7 @@ struct PermissionsView: View {
     @Bindable var model: AppModel
     var body: some View {
         VStack(spacing: 20) {
-            VStack(spacing: 8) { KitBrandMark(.annotator, size: 34).foregroundStyle(.primary); Text("Annotate anything on screen").font(.kitHeading); Text("Allow two permissions to select and capture UI.").font(.kitDetail).foregroundStyle(.secondary) }
+            VStack(spacing: 8) { AnnotatorMark( size: 34).foregroundStyle(.primary); Text("Annotate anything on screen").font(.kitHeading); Text("Allow two permissions to select and capture UI.").font(.kitDetail).foregroundStyle(.secondary) }
             KitGroup {
                 permission("Accessibility", "Read the element under your cursor.", "accessibility")
                 permission("Screen Recording", "Capture the area you annotate.", "screenRecording")

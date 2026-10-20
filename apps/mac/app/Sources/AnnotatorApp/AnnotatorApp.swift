@@ -30,7 +30,7 @@ import DesignKit
                 .onAppear { model.act("menu_opened") }
         } label: {
             HStack {
-                if let image = KitBrandImages.menuBarIcon(.annotator, variant: model.isAnnotating ? .active : .standard) {
+                if let image = AnnotatorMenuBarIcon.image(annotating: model.isAnnotating) {
                     Image(nsImage: image)
                         .accessibilityLabel(model.isAnnotating ? "Annotator: annotating" : "Annotator")
                 }
