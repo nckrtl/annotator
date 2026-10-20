@@ -36,6 +36,20 @@ scripts/snapshots.sh          # light and dark UI captures with made-up data
 
 `scripts/install.sh` signs with the user's identity and installs into `/Applications`. Run it only on the user's Mac, and only when they ask.
 
+## Build in nick-vm
+
+Build, run and test the Mac app in the macOS VM `nick-vm`, never on Nick's Mac.
+Checkouts live in `~/apps` there. Other agents build in the VM at the same time:
+
+- Work in your own checkout or worktree.
+- Build from the command line, with output in a git-ignored folder of your
+  checkout. Do not open Xcode.app.
+- Never kill or shut down Xcode, simulators, Metro or apps you did not start.
+- Before a GUI step, run `mkdir /tmp/vm-gui.lock` in the VM (retry every 20 s)
+  and `rmdir /tmp/vm-gui.lock` right after.
+
+The full rules are under "Share the VM" in `~/apps/AGENTS.md`.
+
 ## Releases
 
 - npm: push a tag `v<version>` that matches `packages/annotator/package.json`. `release.yml` checks the tag, tests, and publishes with npm trusted publishing (OIDC). npm binds that trust to this repository and to the file name `.github/workflows/release.yml`. Do not rename or move it.
