@@ -59,7 +59,8 @@ full-screen placement were not verified. The demos validate rendering; core
 and fixture tests validate the covered workflows. Comment panels retain the
 old all-applications/all-spaces collection behavior.
 
-The app now requires macOS 26, as DesignKit does. Mac CI checks out the private
-DesignKit repository and requires a read-only `DESIGN_KIT_TOKEN` repository
-secret. That secret is absent, so remote Mac CI is not verified. Local checks
-used the VM's authenticated DesignKit checkout.
+The app now requires macOS 26, as DesignKit does. At this verification, Mac CI
+could not check out the private DesignKit repository because `DESIGN_KIT_TOKEN`
+was absent. Local checks used the VM's authenticated DesignKit checkout.
+CI now uses `DESIGN_KIT_DEPLOY_KEY`, a read-only deploy key scoped to DesignKit,
+stored as an Annotator Actions secret and removed by checkout before build steps.

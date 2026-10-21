@@ -304,8 +304,9 @@ The app is not sandboxed. Entitlements stay empty.
 registers it and starts it. Do not run it on the VM. Do not reset privacy grants
 or change signing identities as a shortcut for testing.
 
-CI checks out the private DesignKit repository using `DESIGN_KIT_TOKEN` (a
-read-only repository secret), and sets `DESIGN_KIT_PATH` to that checkout.
+CI checks out the private DesignKit repository using `DESIGN_KIT_DEPLOY_KEY`
+(a read-only SSH deploy key stored as an Annotator Actions secret), and sets
+`DESIGN_KIT_PATH` to that checkout. Checkout does not persist the key for build steps.
 
 ## Verification
 
