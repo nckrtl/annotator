@@ -81,7 +81,7 @@ for line in sys.stdin:
         try:
             environment = os.environ | {'HOME': str(temp), 'ANNOTATOR_HELPER': str(helper)}
             stderr = (temp / 'core.log').open('w')
-            process = subprocess.Popen([str(Path(os.environ.get('CARGO_TARGET_DIR', MAC / 'src-tauri/target')) / 'debug/annotator')], env=environment,
+            process = subprocess.Popen([str(Path(os.environ.get('CARGO_TARGET_DIR', MAC / 'build/rust')) / 'debug/annotator')], env=environment,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
             messages = queue.Queue()
             events = []

@@ -62,7 +62,7 @@ jobs:
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/mac/src-tauri
+          workspaces: apps/mac/src-tauri -> ../build/rust
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
