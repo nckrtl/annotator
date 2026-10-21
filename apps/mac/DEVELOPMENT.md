@@ -151,3 +151,35 @@ Run `scripts/check-windows.sh` to check the real window lifecycle in light and d
 with demo data. It verifies the frontmost app and editable key comment field,
 without starting the core or annotation server. Its comment images are offscreen
 renders; the window visibility and focus assertions use real AppKit windows.
+
+## Permission controls and installed identity
+
+The menu shows an Allow button for each missing permission. The buttons use the
+same helper requests and privacy panes as onboarding. Accessibility opens
+`Privacy_Accessibility` (called Device Control and Data Access on macOS 27).
+Screen Recording requests capture access and opens `Privacy_ScreenCapture` if
+it remains denied. The menu refreshes on appearance and when its retained window
+becomes key. Returning to Annotator also refreshes permission state. A background
+refresh error stays in the permission UI without raising the library.
+
+`scripts/check-menu.sh` captures both missing, each missing alone, and both granted
+in light and dark. It checks request dispatch, menu dismissal/reopening, and refresh
+errors with demo data. The runner calls the button's model action; it does not
+prove a physical click or change real grants. `scripts/smoke-core.py` checks grants
+and revocations through the real core with a fixture helper.
+When another app owns desktop focus, `ANNOTATOR_MENU_CHECK_UNFOCUSED=1` explicitly
+allows synthetic key notifications. That checks event routing, not native activation.
+
+The installer verifies unchanged designated requirements for the host, helper
+and core before replacement. It saves the previous bundle as
+`~/Library/Application Support/com.nckrtl.annotator/Backups/Previous.zip`, then
+unregisters the built and installed paths and registers the canonical helper and
+host. Failed replacement restores the archive. Never retain unpacked backup apps:
+LaunchServices can display their name and old icon in System Settings even when
+the current bundle metadata is correct. Existing stale backups need a separate,
+targeted registration repair; the installer does not scan or reset TCC.
+
+`scripts/test.sh` includes isolated installer tests for archive creation, rollback,
+and refusal of a changed host, helper or core signing requirement. The fixtures
+mock signing and registration and never touch `/Applications`. `check-bundle.sh`
+also checks the built names, IDs, supplied `.icns` bytes and nested signatures.

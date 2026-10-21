@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import DesignKit
 import ScreenCaptureKit
+import AnnotatorCore
 
 /// Checks intrinsic menu sizing and its window actions without touching user data.
 @MainActor enum MenuCheck {
@@ -11,6 +12,7 @@ import ScreenCaptureKit
         do {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
             try await Task.sleep(for: .seconds(1))
+            await checkPermissionRefresh(model)
 
             for appearance in ["light", "dark"] {
                 NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
@@ -18,7 +20,7 @@ import ScreenCaptureKit
                 try await statusItemShots(model, appearance: appearance, directory: directory)
                 if ProcessInfo.processInfo.environment["ANNOTATOR_MENU_ICONS_ONLY"] == "1" { continue }
                 let host = NSHostingView(rootView: MenuPanel(model: model).kitAppearance())
-                let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
+                let window = MenuCheckWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
                 window.contentView = host
                 window.appearance = NSApp.appearance
@@ -29,6 +31,47 @@ import ScreenCaptureKit
                 precondition(window.frame.width == 360 && window.frame.height > 200 && window.frame.height <= 620, "Menu must have a usable intrinsic size")
                 print("PASS \(appearance) intrinsic menu: \(window.frame.size)")
                 await shot(window, name: "\(appearance)-menu", directory: directory)
+                for (name, accessibility, screenRecording) in [
+                    ("missing", false, false), ("screen-recording", true, false),
+                    ("accessibility", false, true), ("granted", true, true)
+                ] {
+                    model.state["permissions"] = .object(["accessibility": .bool(accessibility), "screenRecording": .bool(screenRecording)])
+                    model.state["health"] = .object(["tone": .string(model.missingPermissions.isEmpty ? "ok" : "warning"),
+                                                     "title": .string(model.missingPermissions.isEmpty ? "Connected" : "Connected · permissions missing")])
+                    try await settle(); window.setContentSize(host.fittingSize); try await settle()
+                    precondition(window.frame.width == 360 && window.frame.height <= 620)
+                    await shot(window, name: "\(appearance)-menu-permissions-\(name)", directory: directory)
+                    var requests: [String] = []
+                    var menuOpens = 0
+                    model.demoRequest = { command, args in
+                        if command == "request_permission" { requests.append(args["kind"]?.string ?? "") }
+                        if command == "menu_opened" { menuOpens += 1 }
+                        return model.state["permissions"]
+                    }
+                    // Exercise the controller used by Allow. SwiftUI's host exposes no AX
+                    // children in this runner; the captures verify the rendered controls.
+                    for permission in model.missingPermissions {
+                        model.requestPermission(permission)
+                        try await settle()
+                        precondition(model.panels?.menu?.isVisible == false, "Allow must dismiss the menu")
+                        window.makeKeyAndOrderFront(nil)
+                        if !window.isKeyWindow {
+                            precondition(ProcessInfo.processInfo.environment["ANNOTATOR_MENU_CHECK_UNFOCUSED"] == "1",
+                                         "Menu fixture cannot become key; an unlocked, available desktop is required")
+                            // Explicit fallback for a desktop owned by another app. This tests
+                            // notification routing, not the OS's focus transition.
+                            NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+                            print("LIMIT native menu activation unavailable; checking synthetic key notification")
+                        }
+                        try await settle()
+                    }
+                    precondition(Set(requests) == Set(model.missingPermissions.map(\.rawValue)), "Allow must request the matching permission")
+                    if !model.missingPermissions.isEmpty {
+                        precondition(menuOpens > 0, "Reopening the retained menu must refresh permissions")
+                    }
+                    model.demoRequest = nil
+                    print("PASS \(appearance) permission controls: \(name)")
+                }
                 for (label, page) in [("Settings…", "settings"), ("Open Annotator", "all")] {
                     model.window?.close()
                     window.makeKeyAndOrderFront(nil)
@@ -71,6 +114,22 @@ import ScreenCaptureKit
             print("PASS menu checks")
         } catch { fatalError("Menu check: \(error)") }
         NSApp.terminate(nil)
+    }
+    static func checkPermissionRefresh(_ model: AppModel) async {
+        let showWindow = model.showWindow
+        var openedLibrary = false
+        model.showWindow = { openedLibrary = true }
+        model.state["commentOpen"] = .bool(true)
+        model.demoRequest = { _, _ in throw BridgeError("Fixture permission refresh failure") }
+        await model.refreshPermissions()
+        precondition(!openedLibrary && model.error == nil && model.permissionRefreshError != nil,
+                     "Background refresh failure must not raise the library during a comment")
+        model.demoRequest = { _, _ in .object(["accessibility": .bool(true), "screenRecording": .bool(false)]) }
+        await model.refreshPermissions()
+        precondition(model.missingPermissions == [.screenRecording] && model.permissionRefreshError == nil)
+        model.demoRequest = nil; model.showWindow = showWindow
+        model.state["commentOpen"] = .bool(false)
+        print("PASS permission refresh applies grants and keeps background errors out of the library")
     }
     /// The system hosts status items outside the app's capturable window list. Capture the
     /// actual status-item view, including its queue count, at 2x in each native appearance.
@@ -115,5 +174,8 @@ import ScreenCaptureKit
             try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory + "/" + name + ".png"))
         } catch { fatalError("Capture \(name): \(error)") }
     }
+}
+@MainActor private final class MenuCheckWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
 }
 #endif

@@ -16,14 +16,7 @@ for executable in Annotator annotator; do
     fi
   done
 done
-rm -rf /Applications/Annotator.app
-ditto "$built" /Applications/Annotator.app
-codesign --verify --deep --strict /Applications/Annotator.app
-helper=/Applications/Annotator.app/Contents/Helpers/AnnotatorNative.app
-touch "$helper"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$helper" || true
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$helper"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/$built" || true
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Annotator.app
+bash scripts/install-bundle.sh "$PWD/$built" /Applications/Annotator.app \
+  "$HOME/Library/Application Support/com.nckrtl.annotator/Backups/Previous.zip"
 open /Applications/Annotator.app
 echo "Installed and started /Applications/Annotator.app"

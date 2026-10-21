@@ -38,9 +38,12 @@ def main():
             'serverURL': base, 'serverAutoStart': False, 't3Enabled': False, 't3Nudge': True,
             'operatorEnabled': False, 'operatorAutoStart': False,
         }))
+        permissions_file = temp / 'permissions.json'
+        permissions_file.write_text(json.dumps({'accessibility': True, 'screenRecording': True}))
         helper = temp / 'helper.py'
         helper.write_text('''#!/usr/bin/env python3
 import json, sys, uuid
+from pathlib import Path
 
 def emit(value):
     print(json.dumps(value), flush=True)
@@ -49,7 +52,7 @@ for line in sys.stdin:
     command = json.loads(line)
     action = command.get('action')
     if action == 'ping': emit({'type': 'online'})
-    if action == 'permissions': emit({'type': 'permissions', 'accessibility': True, 'screenRecording': True})
+    if action == 'permissions': emit({'type': 'permissions'} | json.loads(Path(__file__).with_name('permissions.json').read_text()))
     if action == 'selectAt' or (action == 'annotate' and command.get('on')):
         record = {'id': str(uuid.uuid4()), 'comment': '', 'element': 'AXButton "Save"',
             'url': 'app://com.example.fixture', 'screenshot': 'data:image/png;base64,aGVsbG8=',
@@ -102,6 +105,13 @@ for line in sys.stdin:
                     events.append(message)
             wait_for(lambda: call('get_state')['permissions']['accessibility'])
             assert any(e.get('event') == 'register-hotkey' for e in events)
+            for ax, screen in [(False, False), (True, False), (False, True), (True, True)]:
+                permissions = {'accessibility': ax, 'screenRecording': screen}
+                permissions_file.write_text(json.dumps(permissions))
+                call('menu_opened')
+                wait_for(lambda: call('get_state')['permissions'] == permissions)
+                assert call('get_permissions') == permissions
+            print('PASS menu-open and activation permission refresh, including grant and revocation')
             settings = call('get_settings')
             assert not any(key.startswith('t3') for key in settings), 'Old Conn keys are ignored'
             settings['operatorAutoStart'] = True
