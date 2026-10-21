@@ -153,8 +153,8 @@ final class AXReader: @unchecked Sendable {
             return match
         }
         var hit: AXUIElement?
-        let frame = found.window.frame
-        guard AXUIElementCopyElementAtPosition(app, Float(frame.midX), Float(frame.midY), &hit) == .success,
+        let windowFrame = found.window.frame
+        guard AXUIElementCopyElementAtPosition(app, Float(windowFrame.midX), Float(windowFrame.midY), &hit) == .success,
             var current = hit
         else { return nil }
         for _ in 0..<64 {

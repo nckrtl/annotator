@@ -30,8 +30,11 @@ import AnnotatorCore
     var commentError: String?
     var commentBusy = false
     var isAnnotating: Bool { state["annotating"].bool || state["commentOpen"].bool }
+    var missingPermissions: [Permission] { Permission.missing(in: state["permissions"]) }
+    var permissionRefreshError: String?
     #if DEBUG
     var demo = ProcessInfo.processInfo.environment["ANNOTATOR_UI_DEMO"] == "1"
+    @ObservationIgnored var demoRequest: ((String, [String: JSON]) async throws -> JSON)?
     #else
     let demo = false
     #endif
@@ -79,11 +82,30 @@ import AnnotatorCore
         catch { projectsError = error.localizedDescription }
     }
     func call(_ command: String, _ args: [String: JSON] = [:]) async throws -> JSON {
+        #if DEBUG
+        if demo, let demoRequest { return try await demoRequest(command, args) }
+        #endif
         if demo { return .null }
         return try await bridge.request(command, .object(args))
     }
     func act(_ command: String, _ args: [String: JSON] = [:]) {
         Task { do { _ = try await call(command, args) } catch { self.error = error.localizedDescription } }
+    }
+    func requestPermission(_ permission: Permission) {
+        panels?.menu?.orderOut(nil)
+        act("request_permission", ["kind": .string(permission.rawValue)])
+    }
+    func refreshPermissions() async {
+        #if DEBUG
+        guard !demo || demoRequest != nil else { return }
+        #endif
+        do {
+            state["permissions"] = try await call("get_permissions")
+            permissionRefreshError = nil
+        } catch {
+            // Background checks must not activate the library over an open comment.
+            permissionRefreshError = error.localizedDescription
+        }
     }
     /// Activation for the comment field must not also reveal the library.
     /// The comment activates Annotator, which would raise the library over the annotated app.

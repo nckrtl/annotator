@@ -62,7 +62,7 @@ jobs:
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/mac/src-tauri
+          workspaces: apps/mac/src-tauri -> ../build/rust
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -71,7 +71,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: nckrtl/design-kit
-          token: ${{ secrets.DESIGN_KIT_TOKEN }}
+          ssh-key: ${{ secrets.DESIGN_KIT_DEPLOY_KEY }}
+          persist-credentials: false
           path: design-kit
 
       - name: Build and test native app

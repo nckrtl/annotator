@@ -27,7 +27,6 @@ import DesignKit
         MenuBarExtra {
             MenuPanel(model: model).kitAppearance()
                 .background(WindowOpener(model: model))
-                .onAppear { model.act("menu_opened") }
         } label: {
             HStack {
                 if let image = KitBrandImages.menuBarIcon(.annotator, variant: model.isAnnotating ? .active : .standard) {
@@ -65,6 +64,9 @@ private struct WindowOpener: View {
         #endif
     }
     func applicationWillTerminate(_ notification: Notification) { AppModel.shared.bridge.stop() }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Task { await AppModel.shared.refreshPermissions() }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         let model = AppModel.shared

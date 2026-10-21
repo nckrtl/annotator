@@ -133,12 +133,13 @@ struct PermissionsView: View {
         VStack(spacing: 20) {
             VStack(spacing: 8) { KitBrandMark(.annotator, size: 34).foregroundStyle(.primary); Text("Annotate anything on screen").font(.kitHeading); Text("Allow two permissions to select and capture UI.").font(.kitDetail).foregroundStyle(.secondary) }
             KitGroup {
-                permission("Accessibility", "Read the element under your cursor.", "accessibility")
-                permission("Screen Recording", "Capture the area you annotate.", "screenRecording")
+                permission(.accessibility, "Read the element under your cursor.")
+                permission(.screenRecording, "Capture the area you annotate.")
             }
             Text("After granting Screen Recording, quit and reopen Annotator if macOS asks.").font(.kitDetail).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if let error = model.permissionRefreshError { KitGroup { KitNotice(error, tone: .error) } }
             HStack {
-                Button("Check again") { Task { do { model.state["permissions"] = try await model.call("get_permissions") } catch { model.error = error.localizedDescription } } }.buttonStyle(.kitSecondary)
+                Button("Check again") { Task { await model.refreshPermissions() } }.buttonStyle(.kitSecondary)
                 Button(model.state["permissions"]["accessibility"].bool && model.state["permissions"]["screenRecording"].bool ? "Done" : "Relaunch") {
                     if model.state["permissions"]["accessibility"].bool && model.state["permissions"]["screenRecording"].bool { model.panels?.permissionWindow?.close() } else { model.act("relaunch") }
                 }.buttonStyle(.kitPrimary)
@@ -147,15 +148,15 @@ struct PermissionsView: View {
             .task {
                 guard !model.demo else { return }
                 while !Task.isCancelled {
-                    if let value = try? await model.call("get_permissions") { model.state["permissions"] = value }
+                    await model.refreshPermissions()
                     try? await Task.sleep(for: .seconds(2))
                 }
             }
     }
-    private func permission(_ title: String, _ detail: String, _ kind: String) -> some View {
-        KitRow(title, detail: detail) {
-            if model.state["permissions"][kind].bool { KitIconImage(.done, size: 18).accessibilityLabel("Allowed") }
-            else { Button("Allow") { model.act("request_permission", ["kind": .string(kind)]) }.buttonStyle(.kit) }
+    private func permission(_ permission: Permission, _ detail: String) -> some View {
+        KitRow(permission.title, detail: detail) {
+            if model.state["permissions"][permission.rawValue].bool { KitIconImage(.done, size: 18).accessibilityLabel("Allowed") }
+            else { Button("Allow") { model.requestPermission(permission) }.buttonStyle(.kit) }
         }
     }
 }
@@ -178,6 +179,22 @@ struct MenuPanel: View {
         let items = AnnotationCollection.items(model.items, page: "all", projects: [], search: query).sorted { $0["number"].int > $1["number"].int }
         KitScrollView {
             VStack(alignment: .leading, spacing: 2) {
+                if let error = model.permissionRefreshError {
+                    KitGroup { KitNotice(error, tone: .error) }.padding(.bottom, Kit.Space.m)
+                }
+                if !model.missingPermissions.isEmpty {
+                    KitGroup("Permissions", footer: model.missingPermissions.contains(.screenRecording)
+                             ? "After allowing Screen Recording, quit and reopen Annotator if macOS asks." : nil) {
+                        ForEach(model.missingPermissions, id: \.rawValue) { permission in
+                            KitRow(permission.title) {
+                                Button("Allow…") { model.requestPermission(permission) }
+                                    .buttonStyle(.kit)
+                                    .accessibilityLabel("Allow \(permission.title)")
+                                    .accessibilityIdentifier("allow-\(permission.rawValue)")
+                            }
+                        }
+                    }.padding(.bottom, Kit.Space.m)
+                }
                 if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
                 if pending > 0 {
                     KitGroup { KitNotice("\(pending) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }.padding(.bottom, Kit.Space.m)
@@ -214,6 +231,12 @@ struct MenuPanel: View {
         // to a strip; give its host a measured height and scroll only when needed.
         .frame(width: 360, height: min(Kit.containerBarHeight + contentHeight, min(Self.maxHeight, (NSScreen.main?.visibleFrame.height ?? 700) - 24)))
         .background(Color.kitContent).background(WindowReader { model.panels?.menu = $0 })
+        .onAppear { model.act("menu_opened") }
+        // MenuBarExtra can retain its SwiftUI view between openings.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let window = notification.object as? NSWindow, window === model.panels?.menu else { return }
+            model.act("menu_opened")
+        }
     }
     /// A search field across the header, and one ⋯ menu that holds the app’s actions.
     private var header: some View {
