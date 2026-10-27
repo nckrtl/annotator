@@ -4,6 +4,7 @@ import { annotations } from "../state";
 import { applyCreatedAnnotations } from "../actions";
 import { onOutsideAnnotationClick, stopAndWaitForPaste } from "../outside-click";
 import { submitDraftAndMove } from "../actions";
+import { stopsOnNextElement } from "../dictation";
 import { ArrowUpIcon, Cog6ToothIcon, MicrophoneIcon, TrashIcon } from "@heroicons/react/16/solid";
 import {
     useEffect,
@@ -127,8 +128,7 @@ export default function AnnotationPopup({
     });
 
     useEffect(() => {
-        if (settings.provider !== "post" || !settings.stopUrl) return;
-        const stopUrl = settings.stopUrl;
+        if (!stopsOnNextElement(settings)) return;
         const unsubscribe = onOutsideAnnotationClick((next) => {
             const field = textarea.current;
             if (!field || pendingMove.current || dictationState === "triggering") return;
@@ -136,7 +136,7 @@ export default function AnnotationPopup({
             pendingMove.current = controller;
             setMoving(true);
             setMoveError(null);
-            void stopAndWaitForPaste(field, stopUrl, controller.signal)
+            void stopAndWaitForPaste(field, settings, controller.signal)
                 .then((text) => {
                     if (controller.signal.aborted) return;
                     commentRef.value = text;

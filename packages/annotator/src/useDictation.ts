@@ -1,7 +1,7 @@
 import { holdCapture } from "./capture-gate";
-import { postDictation } from "./post-dictation";
+import { triggerDictation } from "./dictation-trigger";
 import { useEffect, useRef, useState } from "react";
-import { dictate, type DictationSettings } from "./dictation";
+import { dictate, triggersDesktopDictation, type DictationSettings } from "./dictation";
 import { setDictationKeyHandlers } from "./dictation-keys";
 import { isDictationEnabled, isUnrelatedEditable, mergeTranscript } from "./dictation-settings";
 import type { Ref } from "./state";
@@ -103,20 +103,18 @@ export function useDictation(options: Options) {
         const releaseCapture = holdCapture();
         session.current.stop = new AbortController();
         session.current.abort = new AbortController();
-        if (session.current.settings.provider === "post") {
+        if (triggersDesktopDictation(session.current.settings)) {
             session.current.state = "triggering";
             setState("triggering");
             options.onBeforeTrigger();
             try {
-                const request = postDictation(
-                    session.current.settings.postUrl!,
+                const request = triggerDictation(
+                    session.current.settings,
+                    "start",
                     AbortSignal.any([session.current.abort.signal, AbortSignal.timeout(10000)]),
-                    "dictate",
                 );
                 releaseCapture();
-                const response = await request;
-                if (!response.ok)
-                    throw new Error(`Dictation trigger failed (HTTP ${response.status}).`);
+                await request;
             } catch (cause) {
                 if (!session.current.disposed) {
                     setError(

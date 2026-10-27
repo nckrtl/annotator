@@ -5,7 +5,9 @@ export type DictationInput = {
     wsUrl?: string;
     postUrl?: string;
     stopUrl?: string;
+    stopOnNextElement?: boolean;
     post_url?: string;
+    stop_on_next_element?: boolean;
     ws_url?: string;
     codec?: string;
     autoStart?: boolean;
@@ -38,6 +40,7 @@ function normalize(input?: DictationInput | null): DictationSettings {
             wsUrl: input.wsUrl ?? input.ws_url,
             postUrl: input.postUrl ?? input.post_url,
             stopUrl: input.stopUrl,
+            stopOnNextElement: input.stopOnNextElement ?? input.stop_on_next_element,
             codec: input.codec,
             autoStart: input.autoStart ?? input.auto_start,
         }).filter(([, value]) => value !== undefined),

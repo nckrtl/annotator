@@ -1,3 +1,4 @@
+import { hostDictationAvailable } from "./dictation-trigger";
 import { attachWaveformMeter } from "./waveform";
 
 /**
@@ -25,6 +26,8 @@ export type DictationSettings = {
     wsUrl?: string;
     postUrl?: string;
     stopUrl?: string;
+    /** Host provider: stop dictation when the user clicks the next element. Default true. */
+    stopOnNextElement?: boolean;
     codec?: string;
     /** Start recording when a new comment popup textarea first appears. */
     autoStart?: boolean;
@@ -52,9 +55,21 @@ const RECORDER_TIMESLICE_MS = 250;
 const OPUS_MIME_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus"] as const;
 
 export function dictationEnabled(settings?: DictationSettings | null): boolean {
+    if (settings?.provider === "host") return hostDictationAvailable();
     return settings?.provider === "post"
         ? Boolean(settings.postUrl)
         : settings?.provider === "diction" && Boolean(settings.wsUrl);
+}
+
+/** A desktop app records and pastes; the page never opens the microphone. */
+export function triggersDesktopDictation(settings?: DictationSettings | null): boolean {
+    return settings?.provider === "post" || settings?.provider === "host";
+}
+
+/** Clicking the next element stops dictation, waits for the paste, and saves. */
+export function stopsOnNextElement(settings?: DictationSettings | null): boolean {
+    if (settings?.provider === "host") return settings.stopOnNextElement !== false;
+    return settings?.provider === "post" && Boolean(settings.stopUrl);
 }
 
 export function supportedOpusMimeType(): string | null {

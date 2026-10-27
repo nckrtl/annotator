@@ -41,6 +41,20 @@ Each annotation carries a JPEG of the area around the element. The overlay takes
 
 `dictation: { provider: "post", postUrl, stopUrl }` asks a desktop dictation app to record and type into the comment field: the overlay sends `POST postUrl` when the popup opens and `POST stopUrl` to stop. `dictation: { wsUrl }` streams microphone audio to a Diction-compatible WebSocket and inserts the transcript. `autoStart: false` waits for the microphone button.
 
+`dictation: { provider: "host" }` works like `post`, but the embedding app sends the requests, so a page Content-Security-Policy (`connect-src`) cannot block them. Use it in an app that shows pages, such as an Electron browser. The host defines one function on the page before the overlay loads:
+
+```ts
+import type { AnnotatorHost } from "@nckrtl/annotator";
+
+const host: AnnotatorHost = {
+    // action is "start" or "stop". Resolve true when it worked, false when it did not.
+    dictation: async (action, { signal }) => startOrStopDictation(action, signal),
+};
+window.__ANNOTATOR_HOST__ = host;
+```
+
+The page passes only the action, never a URL. The host decides where the request goes, so a page cannot use the host to reach other local services. Dictation is on while `window.__ANNOTATOR_HOST__.dictation` is a function. `false` or a rejection shows the same error as a failed `post` request. The overlay passes an abort signal and stops waiting after 10 seconds for a start, and after 15 seconds for a stop and its paste. Clicking the next element stops dictation, waits for the paste, and saves the annotation; `stopOnNextElement: false` turns that off. `autoStart: false` waits for the microphone button. The snake_case names `auto_start` and `stop_on_next_element` also work.
+
 ## Local annotation server
 
 Run `npx @nckrtl/annotator serve` and choose **Local server** in **Delivery mode**, and paste the printed annotation URL into **Annotation server URL** in the toolbar settings. The URL is remembered for the tab across refreshes. A failed submission can be retried manually while cached; it never falls back to another delivery mode. In server mode, the next successful list removes cached records not present on the server.

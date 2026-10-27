@@ -47,6 +47,8 @@ export {
 } from "./runtime";
 export type { Annotation, AnnotationRect } from "./types";
 export type { DictationSettings } from "./dictation";
+export type { DictationInput } from "./dictation-settings";
+export type { AnnotatorHost, HostDictationAction } from "./dictation-trigger";
 export type { ToolbarData } from "./core/request-history";
 export type { AnnotationMetadataHook, AnnotationMetadataTarget, CaptureHook } from "./hooks";
 export type {

@@ -1,4 +1,6 @@
-import { postDictation, recordDictationTiming } from "./post-dictation";
+import type { DictationSettings } from "./dictation";
+import { triggerDictation } from "./dictation-trigger";
+import { recordDictationTiming } from "./post-dictation";
 import type { AnnotationDraft } from "./types";
 
 let handler: ((next: AnnotationDraft) => void) | null = null;
@@ -16,10 +18,10 @@ export function requestAnnotationMove(next: AnnotationDraft): boolean {
     return true;
 }
 
-/** Listen before stopping so a paste arriving before the HTTP response is retained. */
+/** Listen before stopping so a paste arriving before the stop response is retained. */
 export async function stopAndWaitForPaste(
     field: HTMLTextAreaElement,
-    url: string,
+    settings: DictationSettings,
     signal: AbortSignal,
 ): Promise<string> {
     let changed = false;
@@ -34,9 +36,8 @@ export async function stopAndWaitForPaste(
     let responseAt: number | undefined;
     performance.clearMeasures("annotate:paste-wait");
     try {
-        const response = await postDictation(url, deadline, "dictate-stop");
+        await triggerDictation(settings, "stop", deadline);
         responseAt = performance.now();
-        if (!response.ok) throw new Error(`Could not stop dictation (HTTP ${response.status}).`);
         while (true) {
             deadline.throwIfAborted();
             if (changed && Date.now() - changedAt >= 500) {

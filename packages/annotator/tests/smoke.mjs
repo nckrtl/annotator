@@ -297,6 +297,95 @@ try {
         await page.close();
         console.log(`outside click ${scenario}: passed`);
     }
+    // The host provider hands start and stop to window.__ANNOTATOR_HOST__. A strict
+    // connect-src blocks page requests to the desktop app, so the page must not make one.
+    for (const scenario of ["paste", "start-false", "start-reject", "stop-false", "no-host"]) {
+        const page = await browser.newPage();
+        const outside = [];
+        page.on("request", (request) => {
+            if (!request.url().startsWith("https://annotation.test/")) outside.push(request.url());
+        });
+        await page.addInitScript((scenario) => {
+            window.hostCalls = [];
+            if (scenario === "no-host") return;
+            window.__ANNOTATOR_HOST__ = {
+                dictation: async (action, { signal }) => {
+                    window.hostCalls.push({ action, signal: signal instanceof AbortSignal });
+                    if (scenario === "start-reject" && action === "start")
+                        throw new Error("No desktop app");
+                    if (scenario === "start-false" && action === "start") return false;
+                    if (scenario === "stop-false" && action === "stop") return false;
+                    return true;
+                },
+            };
+        }, scenario);
+        await page.route("https://annotation.test/**", async (route) => {
+            if (route.request().url().endsWith("inject.js")) {
+                await route.fulfill({
+                    contentType: "text/javascript; charset=utf-8",
+                    body: await readFile(new URL("../dist/inject.js", import.meta.url)),
+                });
+            } else {
+                await route.fulfill({
+                    contentType: "text/html; charset=utf-8",
+                    headers: { "Content-Security-Policy": "connect-src 'self'" },
+                    body: '<h1>First target</h1><button id="next" style="position:absolute;left:600px;top:200px">Next target</button><script>window.__AGENT_ANNOTATION__ = {dictation:{provider:"host"}};</script><script src="/inject.js"></script>',
+                });
+            }
+        });
+        await page.goto("https://annotation.test/");
+        await page.getByRole("button", { name: "Enter annotation mode" }).click();
+        await page.getByRole("heading").click();
+        const field = page.locator("[data-annotation-field]");
+        await field.waitFor();
+        const calls = () => page.evaluate(() => window.hostCalls.map((call) => call.action));
+        if (scenario === "no-host") {
+            await page.waitForTimeout(150);
+            assert.equal(
+                await page.getByRole("button", { name: "Dictate comment", exact: true }).count(),
+                0,
+            );
+            assert.deepEqual(await calls(), []);
+        } else if (scenario.startsWith("start-")) {
+            await page.getByRole("alert").waitFor();
+            assert.match(
+                await page.getByRole("alert").textContent(),
+                scenario === "start-false"
+                    ? /Could not trigger local dictation: The host did not start dictation\./
+                    : /Could not trigger local dictation: No desktop app/,
+            );
+            assert.deepEqual(await calls(), ["start"]);
+        } else {
+            await page.getByRole("button", { name: "Dictate comment", exact: true }).waitFor();
+            assert.deepEqual(await calls(), ["start"]);
+            assert.equal(
+                await page.evaluate(() => window.hostCalls[0].signal),
+                true,
+                "the host receives an abort signal",
+            );
+            await page.locator("#next").click();
+            if (scenario === "stop-false") {
+                await page.getByRole("alert").waitFor();
+                assert.match(
+                    await page.getByRole("alert").textContent(),
+                    /Could not stop dictation: The host did not stop dictation\./,
+                );
+                assert.deepEqual(await calls(), ["start", "stop"]);
+            } else {
+                await page.getByPlaceholder("Waiting for paste…").waitFor();
+                await page.keyboard.insertText("Host dictated comment");
+                await page.waitForFunction(() => {
+                    const value = JSON.parse(localStorage.getItem("toolbar-annotations-/") ?? "[]");
+                    return value.some((item) => item.comment === "Host dictated comment");
+                });
+                await page.getByRole("button", { name: "Dictate comment", exact: true }).waitFor();
+                assert.deepEqual(await calls(), ["start", "stop", "start"]);
+            }
+        }
+        assert.deepEqual(outside, [], "host mode makes no request outside the page origin");
+        await page.close();
+        console.log(`host dictation ${scenario}: passed`);
+    }
     {
         const page = await browser.newPage();
         await page.route("https://annotation.test/**", async (route) => {

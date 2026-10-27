@@ -17,7 +17,7 @@ import { consumeDictationEnter, consumeDictationEscape } from "./dictation-keys"
 import { isUnrelatedEditable, isDictationEnabled } from "./dictation-settings";
 import { resolveAnnotationContext } from "./context";
 import { annotationContextFields, annotationPayload } from "./payload";
-import { releaseMicrophone, warmMicrophone } from "./dictation";
+import { releaseMicrophone, triggersDesktopDictation, warmMicrophone } from "./dictation";
 import { captureReady } from "./capture-gate";
 import { captureAnnotationScreenshot } from "./screenshot";
 import {
@@ -623,7 +623,7 @@ export function setAnnotationMode(active: boolean): void {
     }
 
     if (
-        dictationSettings.value.provider !== "post" &&
+        !triggersDesktopDictation(dictationSettings.value) &&
         isDictationEnabled(dictationSettings.value) &&
         dictationSettings.value.autoStart !== false
     ) {
