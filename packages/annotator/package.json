@@ -42,18 +42,16 @@
         "check": "vp check",
         "prepack": "vp run build"
     },
-    "dependencies": {
-        "@heroicons/react": "2",
-        "html-to-image": "^1.11.13",
-        "react": "^19.3.0",
-        "react-dom": "^19.3.0"
-    },
     "devDependencies": {
+        "@heroicons/react": "2",
         "@tailwindcss/vite": "^4.3.3",
         "@types/node": "^26.6.2",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
+        "html-to-image": "^1.11.13",
         "playwright": "1.62.1",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
         "tailwindcss": "^4.3.3",
         "typescript": "~6.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
