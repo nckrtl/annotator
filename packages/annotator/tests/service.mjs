@@ -8,6 +8,8 @@ let revision = 0;
 let annotation;
 let queueRecords = [];
 let discoveryService = "@nckrtl/annotator";
+/** DELETE requests to the queue server, which acts like one from before site removal. */
+const queueDeletes = [];
 const streams = new Set();
 let subscriptions = 0;
 const send = () => {
@@ -69,6 +71,13 @@ const server = createServer(async (request, response) => {
         response.end(
             `<h1>Queue target</h1><script type="module">import { mountAnnotation } from "/index.js"; mountAnnotation({${url.pathname === "/explicit" ? 'serverUrl:"/queue/annotations",' : 'discoverServerUrl:"/queue/annotations",'}dictation:{autoStart:false}});</script>`,
         );
+    } else if (url.pathname.startsWith("/queue/annotations") && request.method === "DELETE") {
+        queueDeletes.push(url.pathname + url.search);
+        const id = url.pathname.slice("/queue/annotations/".length);
+        // Like an older server: without an id, everything goes.
+        queueRecords = id ? queueRecords.filter((record) => record.id !== id) : [];
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ data: { removedIds: [id] } }));
     } else if (url.pathname === "/queue/annotations") {
         response.setHeader("Content-Type", "application/json");
         response.end(JSON.stringify({ data: queueRecords, meta: { service: discoveryService } }));
@@ -435,6 +444,25 @@ try {
     await queuePage.goto(`${origin}/explicit`);
     await queuePage.getByRole("button", { name: "Enter annotation mode", exact: true }).click();
     await queuePage.getByRole("button", { name: "Edit annotation 4", exact: true }).waitFor();
+    // The bin removes this site's annotations. This server cannot do that in one request,
+    // so the page removes them one by one and leaves other sites and apps alone.
+    queueRecords = [
+        { ...queueRecords[0], url: `${origin}/explicit` },
+        { ...queueRecords[0], id: "other-site", number: 5, url: "https://other.test/explicit" },
+        { ...queueRecords[0], id: "desktop", number: 6, url: "app://com.apple.mail" },
+    ];
+    await queuePage.getByRole("button", { name: "Clear all annotations" }).click();
+    await queuePage.waitForFunction(
+        () =>
+            !document
+                .querySelector("#laravel-toolbar-annotation-host")
+                .shadowRoot.querySelector("[data-annotation-marker]"),
+    );
+    assert.deepEqual(queueDeletes, ["/queue/annotations/explicit-pin"]);
+    assert.deepEqual(
+        queueRecords.map((record) => record.id),
+        ["other-site", "desktop"],
+    );
     discoveryService = "not-annotator";
     const refusedPage = await queueContext.newPage();
     await refusedPage.goto(`${origin}/discover`);

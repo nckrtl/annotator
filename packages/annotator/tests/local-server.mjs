@@ -65,7 +65,7 @@ try {
     for (const host of [
         "evil.example",
         `evil.example:${new URL(first.url).port}`,
-        "localhost:1",
+        "localhost.evil.example",
         "127.0.0.1.evil.example",
     ]) {
         const code = await new Promise((resolve, reject) => {

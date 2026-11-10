@@ -37,6 +37,8 @@ let transport: AnnotationTransport | undefined;
 let generation = 0;
 let discoverUrl = "";
 let eventsUrl = "";
+/** The server removes one site's annotations on request. An older server would clear everything. */
+let removesBySite = false;
 export type ServiceOptions = {
     /** Local annotation server endpoint. */
     serverUrl?: string;
@@ -147,6 +149,7 @@ export function configureAnnotationService(
         /* Optional storage. */
     }
     eventsUrl = "";
+    removesBySite = false;
     serviceConnection.setState(serviceUrl || transport ? "Connecting" : "Host integration");
     generation++;
     revisions.clear();
@@ -194,13 +197,16 @@ export function parseAnnotation(value: unknown): Annotation | null {
             item.status === "todo" ? "pending" : item.status === "done" ? "resolved" : item.status,
     } as Annotation;
 }
-function isOtherSite(url: string | undefined): boolean {
-    if (!url) return false;
+function siteOf(url: string): string | undefined {
     try {
-        return new URL(url, window.location.href).origin !== window.location.origin;
+        return new URL(url, window.location.href).origin;
     } catch {
-        return false;
+        return undefined;
     }
+}
+function isOtherSite(url: string | undefined): boolean {
+    const site = url ? siteOf(url) : undefined;
+    return site !== undefined && site !== window.location.origin;
 }
 function receive(value: unknown): Annotation | null {
     const annotation = parseAnnotation(value);
@@ -360,13 +366,21 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
     } else if (serviceUrl) {
         try {
             // Screenshots stay on the server; the pins do not need them.
-            const result = (await request(`${serviceUrl}?screenshots=0`)) as {
+            const result = (await request(
+                `${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}screenshots=0`,
+            )) as {
                 annotations?: unknown[];
                 data?: unknown[];
-                meta?: { eventsUrl?: string; lastNumber?: number; deletedIds?: string[] };
+                meta?: {
+                    eventsUrl?: string;
+                    lastNumber?: number;
+                    deletedIds?: string[];
+                    removesBySite?: boolean;
+                };
             };
             if (current !== generation) return summary([]);
             serviceConnection.setState("Connected");
+            removesBySite = result.meta?.removesBySite === true;
             rememberNumber(result.meta?.lastNumber);
             if (result.meta?.eventsUrl) {
                 const endpoint = new URL(serviceUrl, window.location.href);
@@ -436,9 +450,14 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
         }
         // Poll only when no event would tell us about a change, and never from a hidden tab.
         const hidden = () => document.visibilityState === "hidden";
+        // A stream can die without closing, for example after sleep. So an open stream slows
+        // the poll down to once a minute; it does not stop it.
         const streaming = () => stream?.readyState === EventSource.OPEN;
+        let ticks = 0;
         const timer = setInterval(() => {
-            if (!hidden() && !connection?.live() && !streaming()) void refresh();
+            ticks++;
+            if (hidden() || connection?.live() || (streaming() && ticks % 4 !== 0)) return;
+            void refresh();
         }, 15000);
         const onVisible = () => {
             if (!hidden() && !connection?.live()) void refresh();
@@ -473,13 +492,21 @@ async function removeLocalAnnotations(scope: RemovalScope): Promise<boolean> {
           : origin !== undefined
             ? `${endpoint}?origin=${encodeURIComponent(origin)}`
             : endpoint;
+    const remove = async (url: string) => {
+        const response = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(10000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    };
     try {
         await mutateLocal(endpoint, async () => {
-            const response = await fetch(target, {
-                method: "DELETE",
-                signal: AbortSignal.timeout(10000),
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (id || origin === undefined || pathname !== undefined || removesBySite)
+                return remove(target);
+            // An older server would clear the whole store: remove this site's records one by one.
+            const list = (await request(endpoint)) as { annotations?: unknown[]; data?: unknown[] };
+            for (const value of list.annotations ?? list.data ?? []) {
+                const record = parseAnnotation(value);
+                if (record?.url && siteOf(record.url) === origin)
+                    await remove(`${endpoint}/${encodeURIComponent(record.id)}`);
+            }
         });
         return true;
     } catch {

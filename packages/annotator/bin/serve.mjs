@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, watch } from "node:fs";
 import { AnnotationStore, normalizeStatus, validId } from "./store.mjs";
 import { clearState, start, status, stop as stopServer, writeState } from "./lifecycle.mjs";
-import { networkInterfaces, tmpdir } from "node:os";
+import { hostname, networkInterfaces, tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
@@ -19,6 +19,8 @@ serve runs in the foreground. Default: 127.0.0.1, a random port and a new tempor
 --host without an IP binds to 0.0.0.0, so other machines can reach the server.
 --allow-origin ORIGIN allows a page on another machine or domain; repeat for each origin.
 Pages on localhost are always allowed.
+--allow-host NAME accepts requests addressed to another name for this machine,
+such as a tunnel or reverse proxy name; repeat for each name.
 --state writes the server's PID, port and URL to FILE while it runs.
 start runs serve in the background; stop and status use the same state file.
 start, stop and status print JSON.`;
@@ -39,6 +41,7 @@ try {
     let stateFile;
     const serveArgs = [];
     const allowedOrigins = new Set();
+    const allowedHosts = new Set();
     while (args.length) {
         const flag = args.shift();
         if (flag === "--host" && (!args.length || args[0].startsWith("--"))) {
@@ -51,7 +54,12 @@ try {
         if (flag === "--port" && /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 65535)
             port = Number(value);
         else if (flag === "--host" && isIP(value)) host = value;
-        else if (flag === "--allow-origin") {
+        else if (flag === "--allow-host") {
+            const name = value.toLowerCase();
+            if (new URL(`http://${name}`).hostname !== name)
+                throw new Error(`Invalid host name: ${value}`);
+            allowedHosts.add(name);
+        } else if (flag === "--allow-origin") {
             const origin = new URL(value);
             if (origin.host === "" || value !== `${origin.protocol}//${origin.host}`)
                 throw new Error(`Invalid origin: ${value}`);
@@ -144,6 +152,31 @@ try {
                 }, 25);
             }),
         );
+        // DNS rebinding needs a name that an attacker controls. An IP address, a loopback name
+        // and this machine's own name cannot be one. Any other name needs --allow-host.
+        // The port is not checked, so port forwards and tunnels keep working.
+        const machine = hostname().toLowerCase();
+        const ownNames = new Set([
+            "localhost",
+            "host.docker.internal",
+            machine,
+            machine.replace(/\.local$/, ""),
+            `${machine.replace(/\.local$/, "")}.local`,
+        ]);
+        const trustedHost = (authority) => {
+            let name;
+            try {
+                name = new URL(`http://${authority}`).hostname.toLowerCase();
+            } catch {
+                return false;
+            }
+            return (
+                isIP(name.replace(/^\[|\]$/g, "")) !== 0 ||
+                name.endsWith(".localhost") ||
+                ownNames.has(name) ||
+                allowedHosts.has(name)
+            );
+        };
         // A page on this machine may always connect. Other pages need --allow-origin.
         const loopbackOrigin = (origin) => {
             try {
@@ -174,23 +207,9 @@ try {
                 response.end(JSON.stringify(body));
             };
             try {
-                // Reject DNS rebinding before serving any endpoint. Proxies must send
-                // the upstream Host, including its port.
-                const localHosts = ["127.0.0.1", "localhost", "[::1]"];
-                if (!["127.0.0.1", "::1"].includes(host)) {
-                    localHosts.push(isIP(host) === 6 ? `[${host}]` : host);
-                    localHosts.push(isIP(publicHost) === 6 ? `[${publicHost}]` : publicHost);
-                }
+                // Reject DNS rebinding before serving any endpoint.
                 const authority = request.headers.host;
-                const listenPort = server.address().port;
-                if (
-                    !localHosts.some(
-                        (name) =>
-                            authority === `${name}:${listenPort}` ||
-                            (listenPort === 80 && authority === name),
-                    )
-                )
-                    return json(403, { error: "Host not allowed" });
+                if (!trustedHost(authority)) return json(403, { error: "Host not allowed" });
                 const url = new URL(request.url, "http://localhost");
                 const path = url.pathname;
                 if (
@@ -294,6 +313,8 @@ try {
                             service: "@nckrtl/annotator",
                             eventsUrl: "annotations/events",
                             skillUrl: "annotations/skill",
+                            // "DELETE ?origin=" removes one site. An older server clears everything.
+                            removesBySite: true,
                             lastNumber: store.lastNumber,
                             deletedIds: [...store.deletedIds],
                         },

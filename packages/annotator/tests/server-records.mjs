@@ -2,9 +2,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
+import { annotationServerProxy } from "../bin/vite.mjs";
 
 const dir = await mkdtemp(join(tmpdir(), "annotate-records-"));
 const script = resolve("bin/serve.mjs");
@@ -42,10 +43,11 @@ const post = (url, body) =>
     });
 const list = async (url) => (await (await fetch(url)).json()).data;
 /** fetch() normalises the path, so a broken percent-escape needs a raw request. */
-const raw = (url, method, path) =>
+const raw = (url, method, path, headers = {}) =>
     new Promise((done, fail) => {
         const target = new URL(url);
-        const req = request({ host: target.hostname, port: target.port, method, path }, (res) => {
+        const options = { host: target.hostname, port: target.port, method, path, headers };
+        const req = request(options, (res) => {
             res.resume();
             done(res.statusCode);
         });
@@ -57,6 +59,27 @@ try {
     const store = join(dir, "store");
     const server = await start(["--store", store]);
     const { url } = server;
+
+    // Rebinding needs a name an attacker controls. Addresses, loopback names and this machine's
+    // name are safe on any port, so agents in a VM, a container or behind a port forward connect.
+    const port = new URL(url).port;
+    for (const host of [
+        `127.0.0.1:${port}`,
+        "localhost:2222",
+        "192.168.64.1:8080",
+        "10.44.0.6",
+        "[fd00::1]:9000",
+        "app.localhost",
+        "host.docker.internal:29703",
+        hostname(),
+    ])
+        assert.equal(await raw(url, "GET", "/health", { Host: host }), 200, host);
+    for (const host of ["evil.example", `rebind.example:${port}`, "localhost.evil.example"])
+        assert.equal(await raw(url, "GET", "/health", { Host: host }), 403, host);
+    const named = await start(["--allow-host", "Tunnel.Example", "--store", join(dir, "named")]);
+    assert.equal(await raw(named.url, "GET", "/health", { Host: "tunnel.example:443" }), 200);
+    assert.equal(await raw(named.url, "GET", "/health", { Host: "other.example" }), 403);
+    assert.equal((await (await fetch(url)).json()).meta.removesBySite, true);
 
     // Pages on this machine connect without a flag. Pages elsewhere do not.
     for (const origin of [
@@ -220,6 +243,48 @@ try {
     assert.equal(await readFile(join(stale, ".server.pid"), "utf8"), String(reused.child.pid));
     // A lock held by a running server still blocks.
     await assert.rejects(start(["--store", stale]), /already served by another process/);
+    // The Vite bridge also accepts a server from before /health named the service.
+    const older = createServer((req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+            req.url === "/health"
+                ? '{"ok":true}'
+                : '{"data":[],"meta":{"service":"@nckrtl/annotator","eventsUrl":"annotations/events"}}',
+        );
+    });
+    await new Promise((done) => older.listen(0, "127.0.0.1", done));
+    const stranger = createServer((req, res) => res.end('{"ok":true,"data":[]}'));
+    await new Promise((done) => stranger.listen(0, "127.0.0.1", done));
+    let bridge;
+    annotationServerProxy().configureServer({
+        middlewares: { use: (handler) => (bridge = handler) },
+    });
+    const viaBridge = (target) =>
+        new Promise((done) => {
+            const res = {
+                headersSent: false,
+                on() {},
+                writeHead(status) {
+                    this.status = status;
+                    this.headersSent = true;
+                },
+                end(body) {
+                    done({ status: this.status, body: JSON.parse(body) });
+                },
+            };
+            const req = {
+                url: `/__annotate/local/${target.address().port}/annotations`,
+                headers: { host: "localhost:5173" },
+                method: "GET",
+            };
+            void bridge(req, res, () => done({ status: 0 }));
+        });
+    const bridged = await viaBridge(older);
+    assert.equal(bridged.status, 200);
+    assert.match(bridged.body.meta.eventsUrl, /^\/__annotate\/local\/\d+\/annotations\/events$/);
+    assert.equal((await viaBridge(stranger)).status, 502);
+    older.close();
+    stranger.close();
     console.log("server records: passed");
 } finally {
     for (const child of children) child.kill("SIGTERM");

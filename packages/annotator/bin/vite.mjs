@@ -49,7 +49,16 @@ export function annotationServerProxy() {
                         signal: AbortSignal.timeout(3000),
                     });
                     const body = await check.json();
-                    if (!check.ok || body.service !== "@nckrtl/annotator")
+                    let known = check.ok && body.service === "@nckrtl/annotator";
+                    if (!known && check.ok && body.ok === true) {
+                        // An older server names itself only in its list.
+                        const list = await fetch(`http://127.0.0.1:${port}/annotations`, {
+                            signal: AbortSignal.timeout(3000),
+                        });
+                        known =
+                            list.ok && (await list.json()).meta?.service === "@nckrtl/annotator";
+                    }
+                    if (!known)
                         return json(502, {
                             error: "This port is not an annotation server. Restart annotator serve with the latest package.",
                         });
