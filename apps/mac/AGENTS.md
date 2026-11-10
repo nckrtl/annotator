@@ -109,6 +109,9 @@ including Conn and T3 Code. Use `completedAt`, or `createdAt` only when completi
 time is absent. Never automatically delete todo, in-progress or question records.
 Validate the server identity, use `DELETE <base>/<id>`, and log counts and annotation
 numbers without comment text. Retention tests use temporary servers, never live data.
+When the launch pass cannot reach the server, it runs again after the next
+successful queue load. The app counts `cancelled` records as finished, but
+retention deletes only `done` ones.
 
 Default base URL: `http://127.0.0.1:29703/annotations`, configurable in
 settings. Run a server for development with:
@@ -125,7 +128,9 @@ Endpoints, all JSON with `Content-Type: application/json`:
 
 | Request | Meaning |
 | --- | --- |
-| `GET <base>` | `{data: Annotation[], meta: {service: "@nckrtl/annotator", lastNumber, ...}}`. Check `meta.service` to confirm the server. |
+| `GET <base>` | `{data: Annotation[], meta: {service: "@nckrtl/annotator", lastNumber, ...}}`. Check `meta.service` to confirm the server. The app sends `?screenshots=0` to leave screenshots out. Older servers ignore it, so the app also drops them itself. |
+| `GET <base>/<id>` | `200 {data: Annotation}` or `404`. The app reads one screenshot this way and checks `data.id`. Older servers answer `405`; on any status but 200 or 404 the app reads the full list instead. |
+| `GET <origin>/health` | `{ok: true, service: "@nckrtl/annotator"}` (older servers: `{ok: true}`). The app asks it to see whether a server already listens before it starts one. |
 | `POST <base>` | Create. Body must have `id` (client-generated, see below) and a non-empty `comment`. The server adds `number`, `status: "todo"`, `createdAt`, `revision`. Re-posting the same `id` returns the existing record (200), so retries are safe. `410` means the record was deleted; do not resend. `413` means over 10 MiB. |
 | `GET <base>/events` | Server-sent events on any change. |
 | `POST <base>/claim` | Agents claim work. Not used by this app. |
@@ -325,7 +330,8 @@ CI checks out the private DesignKit repository using `DESIGN_KIT_DEPLOY_KEY`
   running Operator. Check hover/click, Option-drag, Escape, paste-before-submit,
   multi-display placement and full-screen panels on a signed installation.
 
-Logs: `~/Library/Logs/Annotator/annotator.log`. Settings:
+Logs: `~/Library/Logs/Annotator/annotator.log`. Past 1 MB it moves to
+`annotator.previous.log`. Settings:
 `~/Library/Application Support/com.nckrtl.annotator/settings.json`.
 
 ## Original delivery phases
