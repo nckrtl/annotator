@@ -126,7 +126,7 @@ impl QueueMonitor {
                 }
                 Err(QueueError::Unreachable(error)) => {
                     // The server may not be up yet. Try again once a load succeeds, not an hour later.
-                    crate::log(&format!("Retention failed: server unreachable: {error}. Retrying after the next load."));
+                    crate::log(&format!("Retention waits for the server: {error}"));
                     tokio::select! { _ = loaded => {}, _ = tokio::time::sleep(wait) => {} }
                 }
                 Err(error) => {
@@ -200,7 +200,8 @@ impl QueueMonitor {
     }
 
     /// One download at a time per generation. A second caller does not start its own: it waits for
-    /// the next pass, which starts after its request, and returns that pass's result.
+    /// the next pass, which starts after its request. Each caller returns the result of the first
+    /// pass that covers its request.
     async fn refresh(&self, client: &AnnotationClient, generation: u64) -> bool {
         let request = {
             let mut inner = self.inner.lock().unwrap();
@@ -226,8 +227,10 @@ impl QueueMonitor {
         };
         // Frees the slot and wakes the waiters also when this future is dropped mid-download.
         let _pass = Pass { monitor: self, generation };
+        let mut first = None;
         loop {
             let ok = self.load(client, generation).await;
+            let result = *first.get_or_insert(ok);
             let again = {
                 let mut inner = self.inner.lock().unwrap();
                 if covers > inner.covered {
@@ -240,7 +243,7 @@ impl QueueMonitor {
             };
             self.passes.notify_waiters();
             if !again {
-                return ok;
+                return result;
             }
         }
     }
@@ -437,7 +440,7 @@ mod tests {
         let task = tokio::spawn(async move { retention.retain_recent(&AnnotationClient::new(base), 0).await });
         tokio::time::sleep(Duration::from_millis(200)).await;
         let listener = std::net::TcpListener::bind(("127.0.0.1", url.port().unwrap())).unwrap();
-        let body = r#"{"data":[{"id":"old","number":3,"status":"done","completedAt":1}],"meta":{"service":"@nckrtl/annotator"}}"#;
+        let body = r#"{"data":[{"id":"old","number":3,"status":"done","completedAt":1,"comment":"fixture"}],"meta":{"service":"@nckrtl/annotator"}}"#;
         let server = crate::testutil::serve_on(listener, vec![Reply::new(200, body)]);
         assert!(monitor.refresh(&AnnotationClient::new(url), 0).await);
         let deleted = tokio::time::timeout(Duration::from_secs(5), async {
