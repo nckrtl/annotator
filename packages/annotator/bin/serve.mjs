@@ -175,7 +175,8 @@ try {
                 const { protocol, hostname } = new URL(origin);
                 return (
                     ["http:", "https:"].includes(protocol) &&
-                    ["localhost", "127.0.0.1", "[::1]"].includes(hostname)
+                    (["localhost", "[::1]"].includes(hostname) ||
+                        /^127(\.\d{1,3}){3}$/.test(hostname))
                 );
             } catch {
                 return false;

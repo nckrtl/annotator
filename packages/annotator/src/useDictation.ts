@@ -16,6 +16,13 @@ type Options = {
     onSubmit: () => void;
 };
 
+/** The focused element, also when it sits inside a shadow root. */
+function deepActiveElement(): Element | null {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+}
+
 export function useDictation(options: Options) {
     const [state, setState] = useState<DictationState>("idle");
     const [error, setError] = useState<string | null>(null);
@@ -220,7 +227,7 @@ export function useDictation(options: Options) {
 
     /** The desktop app may still record: a click on the next element has to stop it. */
     const desktopPending = (): boolean => session.current.desktopPending;
-    /** Text reached the field, typed or pasted, so the desktop dictation is over. */
+    /** Dictated text reached the field, so the desktop dictation is over. */
     const noteInput = (): void => {
         session.current.desktopPending = false;
     };
@@ -229,7 +236,7 @@ export function useDictation(options: Options) {
         session.current.disposed = false;
         setDictationKeyHandlers({
             onEnter: () => {
-                if (isUnrelatedEditable(document.activeElement)) {
+                if (isUnrelatedEditable(deepActiveElement())) {
                     return false;
                 }
 

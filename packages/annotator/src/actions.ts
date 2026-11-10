@@ -24,6 +24,7 @@ import {
     clearSyncedAnnotations,
     deleteSyncedAnnotation,
     fetchAnnotationSync,
+    keepsLocalChange,
     pushAnnotation,
 } from "./sync";
 import type { Annotation, AnnotationDraft } from "./types";
@@ -339,9 +340,14 @@ export function applyCreatedAnnotations(incoming: Annotation[]): void {
             continue;
         }
 
+        // The Mac app marks its records with "native". They have no place on a page, also
+        // when they are about a browser window that shows this page.
+        if ("native" in annotation) continue;
+
         const existing = next.get(annotation.id);
 
         if (existing && (existing.revision ?? 0) > (annotation.revision ?? 0)) continue;
+        if (keepsLocalChange(existing, annotation)) continue;
 
         if (
             existing &&
@@ -781,7 +787,8 @@ export function handleKeyDown(event: KeyboardEvent): void {
         !event.ctrlKey &&
         !event.altKey
     ) {
-        if (isUnrelatedEditable(event.target)) {
+        // Inside a shadow root the event's target is the host; the path has the real field.
+        if (isUnrelatedEditable(event.composedPath()[0] ?? event.target)) {
             return;
         }
 

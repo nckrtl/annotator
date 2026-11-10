@@ -1,5 +1,13 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+    mkdirSync,
+    openSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    statSync,
+    writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 const SERVICE = "@nckrtl/annotator";
@@ -26,6 +34,14 @@ export function clearState(file, pid) {
     if (readState(file)?.pid === pid) rmSync(file, { force: true });
 }
 
+function writtenAt(file) {
+    try {
+        return statSync(file).mtimeMs;
+    } catch {
+        return undefined;
+    }
+}
+
 function alive(pid) {
     try {
         process.kill(pid, 0);
@@ -38,16 +54,24 @@ function alive(pid) {
 /**
  * False only when the PID surely belongs to another program. After a crash or a power loss the
  * system can give a server's old PID to something else; that must not block the store forever.
+ * `writtenAt` is when the server wrote its lock or state file. A server starts before it writes
+ * that file, so a process that started later is not that server.
  */
-export function mayBeServer(pid) {
+export function mayBeServer(pid, writtenAt) {
     if (process.platform === "win32") return true;
     try {
-        const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+        const line = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], {
             encoding: "utf8",
             timeout: 2000,
+            env: { ...process.env, LC_ALL: "C" },
             stdio: ["ignore", "pipe", "ignore"],
-        });
-        return /node|bun|deno|annotator/i.test(command);
+        }).trim();
+        // "Tue Nov 10 22:35:54 2026 node …": the start time is the first five words.
+        const words = line.split(/\s+/);
+        const started = Date.parse(words.slice(0, 5).join(" "));
+        if (writtenAt !== undefined && Number.isFinite(started) && started > writtenAt + 2000)
+            return false;
+        return /node|bun|deno|annotator/i.test(words.slice(5).join(" "));
     } catch {
         return true;
     }
@@ -72,7 +96,7 @@ async function responds(url) {
 /** Report the server in the state file. A dead server's state file is removed. */
 export async function status(file) {
     const state = readState(file);
-    const live = state && alive(state.pid) && mayBeServer(state.pid);
+    const live = state && alive(state.pid) && mayBeServer(state.pid, writtenAt(file));
     if (live && (await responds(state.url))) return { running: true, ...state };
     if (state && !live) rmSync(file, { force: true });
     return live
@@ -109,7 +133,7 @@ export async function start(file, serveArgs, script) {
 /** Stop the server in the state file with SIGTERM, so it closes its store cleanly. */
 export async function stop(file) {
     const state = readState(file);
-    if (!state || !alive(state.pid) || !mayBeServer(state.pid)) {
+    if (!state || !alive(state.pid) || !mayBeServer(state.pid, writtenAt(file))) {
         rmSync(file, { force: true });
         return { running: false, stopped: false };
     }

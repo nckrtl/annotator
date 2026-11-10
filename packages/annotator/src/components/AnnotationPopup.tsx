@@ -330,8 +330,12 @@ export default function AnnotationPopup({
             return;
         }
 
-        const syncValue = () => {
-            noteDictationInput();
+        const syncValue = (event: Event) => {
+            // A paste, or several characters at once, is the dictated text. A typed character
+            // is not: the desktop app may still record.
+            const { inputType, data } = event as InputEvent;
+            if (inputType?.startsWith("insertFrom") || (data?.length ?? 0) > 1)
+                noteDictationInput();
             commentRef.value = field.value;
             fitField();
         };

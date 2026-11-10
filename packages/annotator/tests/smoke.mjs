@@ -310,6 +310,7 @@ try {
         "typed",
         "empty",
         "pasted",
+        "typed-while-recording",
     ]) {
         const page = await browser.newPage();
         const outside = [];
@@ -377,6 +378,18 @@ try {
             assert.equal(await page.getByRole("alert").count(), 0);
             assert.equal(await page.locator("[data-annotation-marker]").count(), 0);
             assert.deepEqual(await calls(), []);
+        } else if (scenario === "typed-while-recording") {
+            // Typed characters do not end a running dictation: the click still stops it,
+            // and the paste lands behind the typed text.
+            await page.getByRole("button", { name: "Dictate comment", exact: true }).waitFor();
+            await field.click();
+            await page.keyboard.type("Prefix ");
+            await page.locator("#next").click();
+            await page.waitForFunction(() => window.hostCalls.length === 2);
+            await page.keyboard.insertText("dictated");
+            await saved("Prefix dictated");
+            await page.waitForFunction(() => window.hostCalls.length === 3);
+            assert.deepEqual(await calls(), ["start", "stop", "start"]);
         } else if (scenario === "pasted") {
             // The desktop app already pasted, for example after its own stop key.
             await page.getByRole("button", { name: "Dictate comment", exact: true }).waitFor();

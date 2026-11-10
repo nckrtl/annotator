@@ -211,9 +211,21 @@ function siteOf(url: string): string | undefined {
         return undefined;
     }
 }
+/** An address that is no web address, such as a desktop app's, is another site too. */
 function isOtherSite(url: string | undefined): boolean {
-    const site = url ? siteOf(url) : undefined;
-    return site !== undefined && site !== window.location.origin;
+    return Boolean(url) && siteOf(url!) !== window.location.origin;
+}
+/**
+ * A change that the server did not accept stays on the pin, with its error, until the server
+ * has something newer. Otherwise the next list would silently put the old text back.
+ */
+export function keepsLocalChange(local: Annotation | undefined, incoming: Annotation): boolean {
+    return (
+        local?.delivery === "error" &&
+        incoming.delivery !== "error" &&
+        !["resolved", "cancelled"].includes(incoming.status ?? "pending") &&
+        (local.revision ?? 0) >= (incoming.revision ?? 0)
+    );
 }
 function receive(value: unknown): Annotation | null {
     const annotation = parseAnnotation(value);
@@ -229,7 +241,15 @@ function receive(value: unknown): Annotation | null {
     if (isOtherSite(annotation.url)) return annotation;
     // Update all paths, including pages not currently mounted, before advancing the event cursor.
     const path = annotation.pathname || window.location.pathname;
-    const existing = loadAnnotations(path).filter((a) => a.id !== annotation.id);
+    const cached = loadAnnotations(path);
+    if (
+        keepsLocalChange(
+            cached.find((a) => a.id === annotation.id),
+            annotation,
+        )
+    )
+        return annotation;
+    const existing = cached.filter((a) => a.id !== annotation.id);
     saveAnnotations(
         annotation.status === "resolved" || annotation.status === "cancelled"
             ? existing

@@ -78,7 +78,7 @@ export class AnnotationStore {
                 else if (error.code !== "EPERM") throw error;
             }
             // After a crash another program can get the old server's PID.
-            if (running && mayBeServer(pid))
+            if (running && mayBeServer(pid, statSync(this.lock).mtimeMs))
                 throw new Error("This annotation store is already served by another process.");
             unlinkSync(this.lock);
         }

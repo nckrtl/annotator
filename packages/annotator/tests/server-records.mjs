@@ -1,7 +1,7 @@
 // Origins, single records, edits and scoped removal on a real server.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer, request } from "node:http";
@@ -94,6 +94,7 @@ try {
         "http://localhost:5173",
         "https://localhost",
         "http://127.0.0.1:8000",
+        "http://127.0.0.2:3000",
         "http://[::1]:3000",
     ]) {
         const response = await fetch(url, {
@@ -250,6 +251,17 @@ try {
     const reused = await start(["--store", stale]);
     assert.equal((await fetch(reused.url)).status, 200);
     assert.equal(await readFile(join(stale, ".server.pid"), "utf8"), String(reused.child.pid));
+    // The same holds when the PID now belongs to another Node.js program: that program started
+    // after the lock was written, so it cannot be the server that wrote it.
+    const later = join(dir, "later");
+    await mkdir(later);
+    const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    children.push(other);
+    await writeFile(join(later, ".server.pid"), String(other.pid));
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    await utimes(join(later, ".server.pid"), hourAgo, hourAgo);
+    const afterReuse = await start(["--store", later]);
+    assert.equal((await fetch(afterReuse.url)).status, 200);
     // A lock held by a running server still blocks.
     await assert.rejects(start(["--store", stale]), /already served by another process/);
     // The Vite bridge also accepts a server from before /health named the service.

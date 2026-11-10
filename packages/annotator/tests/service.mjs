@@ -293,6 +293,15 @@ try {
         });
     await status("in_progress");
     await page.getByRole("button", { name: "In progress annotation 1" }).waitFor({ timeout: 5000 });
+    // The server refuses an edit of claimed work. The pin keeps the new text and says why,
+    // also after later lists, until the server has something newer.
+    await page.locator("textarea").fill("Too late");
+    await page.locator("[data-annotation-submit]").click();
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "In progress annotation 1" }).click();
+    assert.equal(await page.locator("textarea").inputValue(), "Too late");
+    await page.getByText("It can no longer be edited.", { exact: false }).waitFor();
+    assert.equal((await (await fetch(localUrl)).json()).data[0].comment, "Local edited");
     const transition = async (action, fields) => {
         const response = await fetch(`${localUrl}/${action}`, {
             method: "POST",

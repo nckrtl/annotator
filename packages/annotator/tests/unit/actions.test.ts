@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { startEdit, cancelDraft } from "../../src/actions";
-import { draft } from "../../src/state";
+import { applyCreatedAnnotations, startEdit, cancelDraft } from "../../src/actions";
+import { annotations, draft } from "../../src/state";
 import { annotationPayload } from "../../src/payload";
 import type { Annotation } from "../../src/types";
 
@@ -53,4 +53,51 @@ it("edits the original element after scrolling and records the new box's scroll 
     startEdit(edited);
     expect(hitTest).toHaveBeenLastCalledWith(140, 90);
     expect(draft.value?.boundingBox.y).toBe(70);
+});
+
+function page() {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", { location: { href: "https://fixture.test/page", pathname: "/page" } });
+    vi.stubGlobal("localStorage", {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => void values.set(key, value),
+    });
+    annotations.value = [];
+}
+const pin = (extra: Partial<Annotation> & Record<string, unknown>): Annotation => ({
+    id: "pin",
+    x: 10,
+    y: 20,
+    timestamp: 1,
+    comment: "Server text",
+    element: "h1",
+    elementPath: "h1",
+    pathname: "/page",
+    url: "https://fixture.test/page",
+    revision: 4,
+    ...extra,
+});
+
+it("shows no pin for a Mac app record about a browser window on this page", () => {
+    page();
+    applyCreatedAnnotations([pin({ id: "web" }), pin({ id: "desktop", native: { app: {} } })]);
+    expect(annotations.value.map((item) => item.id)).toEqual(["web"]);
+});
+
+it("keeps a refused edit and its error until the server has something newer", () => {
+    page();
+    applyCreatedAnnotations([pin({})]);
+    const refused = pin({
+        comment: "My edit",
+        delivery: "error",
+        syncError: "It can no longer be edited.",
+    });
+    applyCreatedAnnotations([refused]);
+    // The next list still has the old text at the same revision.
+    applyCreatedAnnotations([pin({})]);
+    expect(annotations.value[0].comment).toBe("My edit");
+    expect(annotations.value[0].syncError).toBe("It can no longer be edited.");
+    applyCreatedAnnotations([pin({ revision: 5, status: "in_progress" })]);
+    expect(annotations.value[0].comment).toBe("Server text");
+    expect(annotations.value[0].syncError).toBeUndefined();
 });
