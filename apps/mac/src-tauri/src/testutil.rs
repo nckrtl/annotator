@@ -64,7 +64,11 @@ impl Server {
 
 /// Serves `replies` one per connection; later connections get the last reply again.
 pub fn serve(replies: Vec<Reply>) -> Server {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    serve_on(TcpListener::bind("127.0.0.1:0").unwrap(), replies)
+}
+
+/// Like `serve`, on a listener the test bound itself, such as a port that was closed before.
+pub fn serve_on(listener: TcpListener, replies: Vec<Reply>) -> Server {
     let port = listener.local_addr().unwrap().port();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let recorded = requests.clone();

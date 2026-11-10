@@ -119,6 +119,8 @@ export default function AnnotationPopup({
         toggle: toggleDictation,
         onEnter: onDictationEnter,
         onEscape: onDictationEscape,
+        desktopPending,
+        noteInput: noteDictationInput,
     } = useDictation({
         comment: commentRef,
         autoStart: !isEditing && settings.autoStart !== false,
@@ -131,7 +133,15 @@ export default function AnnotationPopup({
         if (!stopsOnNextElement(settings)) return;
         const unsubscribe = onOutsideAnnotationClick((next) => {
             const field = textarea.current;
-            if (!field || pendingMove.current || dictationState === "triggering") return;
+            if (!field || pendingMove.current || dictationState === "triggering") return true;
+            // No desktop dictation is waiting to paste: there is nothing to stop.
+            if (!desktopPending()) {
+                const text = field.value.trim();
+                if (!text) return false;
+                commentRef.value = text;
+                submitDraftAndMove(text, currentDraft.current, next);
+                return true;
+            }
             const controller = new AbortController();
             pendingMove.current = controller;
             setMoving(true);
@@ -154,6 +164,7 @@ export default function AnnotationPopup({
                         if (!controller.signal.aborted) setMoving(false);
                     }
                 });
+            return true;
         });
         return unsubscribe;
     }, [settings, dictationState, draft]);
@@ -319,7 +330,12 @@ export default function AnnotationPopup({
             return;
         }
 
-        const syncValue = () => {
+        const syncValue = (event: Event) => {
+            // A paste, or several characters at once, is the dictated text. A typed character
+            // is not: the desktop app may still record.
+            const { inputType, data } = event as InputEvent;
+            if (inputType?.startsWith("insertFrom") || (data?.length ?? 0) > 1)
+                noteDictationInput();
             commentRef.value = field.value;
             fitField();
         };
@@ -522,7 +538,8 @@ export default function AnnotationPopup({
                 <div role="alert" className="px-4 py-2 text-xs text-red-300">
                     {mode === "server"
                         ? savedAnnotation.syncError ===
-                          "Enter the annotation server URL in settings."
+                              "Enter the annotation server URL in settings." ||
+                          savedAnnotation.syncError.endsWith("It can no longer be edited.")
                             ? savedAnnotation.syncError
                             : "Could not save annotation to the local server."
                         : savedAnnotation.syncError === "Failed to fetch"

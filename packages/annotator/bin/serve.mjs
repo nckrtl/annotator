@@ -17,7 +17,10 @@ const usage = `Usage:
 
 serve runs in the foreground. Default: 127.0.0.1, a random port and a new temporary store.
 --host without an IP binds to 0.0.0.0, so other machines can reach the server.
---allow-origin ORIGIN restricts browser access; repeat for each allowed origin.
+--allow-origin ORIGIN allows a page on another machine or domain; repeat for each origin.
+Pages on localhost are always allowed.
+--allow-host NAME accepts requests addressed to this machine by name, such as its
+host name or a reverse proxy name; repeat for each name. IP addresses always work.
 --state writes the server's PID, port and URL to FILE while it runs.
 start runs serve in the background; stop and status use the same state file.
 start, stop and status print JSON.`;
@@ -38,6 +41,7 @@ try {
     let stateFile;
     const serveArgs = [];
     const allowedOrigins = new Set();
+    const allowedHosts = new Set();
     while (args.length) {
         const flag = args.shift();
         if (flag === "--host" && (!args.length || args[0].startsWith("--"))) {
@@ -50,7 +54,12 @@ try {
         if (flag === "--port" && /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 65535)
             port = Number(value);
         else if (flag === "--host" && isIP(value)) host = value;
-        else if (flag === "--allow-origin") {
+        else if (flag === "--allow-host") {
+            const name = value.toLowerCase();
+            if (new URL(`http://${name}`).hostname !== name)
+                throw new Error(`Invalid host name: ${value}`);
+            allowedHosts.add(name);
+        } else if (flag === "--allow-origin") {
             const origin = new URL(value);
             if (origin.host === "" || value !== `${origin.protocol}//${origin.host}`)
                 throw new Error(`Invalid origin: ${value}`);
@@ -112,7 +121,9 @@ try {
         const notify = () => {
             const records = store.list();
             const present = new Set(records.map((a) => a.id));
-            const removed = [...knownAnnotations.values()].filter((a) => !present.has(a.id));
+            const removed = [...knownAnnotations.values()].filter(
+                (a) => !present.has(a.id) && !store.unreadableIds.has(a.id),
+            );
             store.rememberDeleted(removed.map((a) => a.id));
             for (const annotation of removed) {
                 logActivity(annotation, "deleted");
@@ -141,6 +152,44 @@ try {
                 }, 25);
             }),
         );
+        // DNS rebinding needs a name that an attacker can point at this machine. An IP address
+        // and "localhost" cannot be one. Every other name can, also this machine's own name on
+        // a hostile network, so it needs --allow-host.
+        // The port is not checked, so port forwards and tunnels keep working.
+        const trustedHost = (authority) => {
+            let name;
+            try {
+                name = new URL(`http://${authority}`).hostname.toLowerCase();
+            } catch {
+                return false;
+            }
+            return (
+                isIP(name.replace(/^\[|\]$/g, "")) !== 0 ||
+                name === "localhost" ||
+                allowedHosts.has(name)
+            );
+        };
+        // A page on this machine may always connect. Other pages need --allow-origin.
+        const loopbackOrigin = (origin) => {
+            try {
+                const { protocol, hostname } = new URL(origin);
+                return (
+                    ["http:", "https:"].includes(protocol) &&
+                    (["localhost", "[::1]"].includes(hostname) ||
+                        /^127(\.\d{1,3}){3}$/.test(hostname))
+                );
+            } catch {
+                return false;
+            }
+        };
+        const decodeId = (value) => {
+            try {
+                return decodeURIComponent(value);
+            } catch {
+                return "";
+            }
+        };
+        const withoutScreenshot = ({ screenshot: _screenshot, ...annotation }) => annotation;
         const server = createServer(async (request, response) => {
             const json = (status, body) => {
                 response.writeHead(status, {
@@ -150,6 +199,9 @@ try {
                 response.end(JSON.stringify(body));
             };
             try {
+                // Reject DNS rebinding before serving any endpoint.
+                const authority = request.headers.host;
+                if (!trustedHost(authority)) return json(403, { error: "Host not allowed" });
                 const url = new URL(request.url, "http://localhost");
                 const path = url.pathname;
                 if (
@@ -166,18 +218,30 @@ try {
                 )
                     return json(404, { error: "Not found" });
                 const origin = request.headers.origin;
-                if (allowedOrigins.size) {
-                    response.setHeader("Vary", "Origin");
-                    if (origin && !allowedOrigins.has(origin))
-                        return json(403, { error: "Origin not allowed" });
-                    if (origin) response.setHeader("Access-Control-Allow-Origin", origin);
-                } else response.setHeader("Access-Control-Allow-Origin", "*");
+                response.setHeader("Vary", "Origin");
+                // The overlay script holds no data, so any page may load it.
+                if (path !== "/inject.js") {
+                    if (
+                        origin &&
+                        origin !== `http://${authority}` &&
+                        !loopbackOrigin(origin) &&
+                        !allowedOrigins.has(origin)
+                    )
+                        return json(403, {
+                            error: "Origin not allowed. Start with --allow-origin ORIGIN or use the Vite proxy.",
+                        });
+                    if (!origin && request.headers["sec-fetch-site"] === "cross-site")
+                        return json(403, { error: "Cross-site browser request not allowed" });
+                }
+                if (origin) {
+                    response.setHeader("Access-Control-Allow-Origin", origin);
+                    response.setHeader("Access-Control-Allow-Private-Network", "true");
+                }
                 response.setHeader(
                     "Access-Control-Allow-Methods",
                     "GET, HEAD, POST, DELETE, OPTIONS",
                 );
                 response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-                response.setHeader("Access-Control-Allow-Private-Network", "true");
                 if (request.method === "OPTIONS") {
                     response.writeHead(204);
                     return response.end();
@@ -185,7 +249,8 @@ try {
                 if (path === "/health" || path === "/inject.js") {
                     if (!["GET", "HEAD"].includes(request.method))
                         return json(405, { error: "Method not allowed" });
-                    if (path === "/health") return json(200, { ok: true });
+                    if (path === "/health")
+                        return json(200, { ok: true, service: "@nckrtl/annotator" });
                     const script = readFileSync(new URL("../dist/inject.js", import.meta.url));
                     response.writeHead(200, {
                         "Content-Type": "text/javascript; charset=utf-8",
@@ -207,8 +272,10 @@ try {
                                   ? queueTemplate
                                   : skillTemplate
                               )
-                                  .replaceAll("{{ANNOTATIONS_URL}}", `${serverUrl()}${base}`)
-                                  .replaceAll("{{PROJECT_ROOT}}", process.cwd()),
+                                  .replaceAll("{{ANNOTATIONS_URL}}", () => `${serverUrl()}${base}`)
+                                  .replaceAll("{{PROJECT_ROOT}}", () =>
+                                      process.cwd().replaceAll("'", "'\\''"),
+                                  ),
                     );
                 }
                 if (request.method === "GET" && path === `${base}/events`) {
@@ -226,29 +293,44 @@ try {
                     });
                     return;
                 }
-                if (request.method === "GET" && path === base)
+                if (request.method === "GET" && path === base) {
+                    // "?screenshots=0" leaves the images out; GET /annotations/<id> has them.
+                    const records = store.list();
                     return json(200, {
-                        data: store.list(),
+                        data:
+                            url.searchParams.get("screenshots") === "0"
+                                ? records.map(withoutScreenshot)
+                                : records,
                         meta: {
                             service: "@nckrtl/annotator",
                             eventsUrl: "annotations/events",
                             skillUrl: "annotations/skill",
+                            // "DELETE ?origin=" removes one site. An older server clears everything.
+                            removesBySite: true,
                             lastNumber: store.lastNumber,
                             deletedIds: [...store.deletedIds],
                         },
                     });
+                }
+                if (request.method === "GET") {
+                    const id = decodeId(path.slice(base.length + 1));
+                    const annotation = validId(id) ? store.find(id) : undefined;
+                    return annotation
+                        ? json(200, { data: annotation })
+                        : json(404, { error: "Annotation not found" });
+                }
                 if (request.method === "DELETE") {
-                    const id =
-                        path === base ? undefined : decodeURIComponent(path.slice(base.length + 1));
+                    const id = path === base ? undefined : decodeId(path.slice(base.length + 1));
                     if (id !== undefined && !validId(id))
                         return json(422, { error: "Invalid annotation id" });
-                    // "?pathname=/page" limits a bulk removal to the annotations of one page.
-                    const pathname =
-                        id === undefined
-                            ? (url.searchParams.get("pathname") ?? undefined)
-                            : undefined;
-                    const removed = store.remove(id, pathname);
-                    if (id === undefined && pathname === undefined) {
+                    // "?pathname=/page" limits a bulk removal to the annotations of one page,
+                    // "?origin=https://site" to those of one site.
+                    const scope = (name) =>
+                        id === undefined ? (url.searchParams.get(name) ?? undefined) : undefined;
+                    const pathname = scope("pathname");
+                    const site = scope("origin");
+                    const removed = store.remove(id, pathname, site);
+                    if (id === undefined && pathname === undefined && site === undefined) {
                         knownAnnotations.clear();
                         console.log("All annotations removed");
                     }
@@ -256,12 +338,15 @@ try {
                     return json(200, { data: { removedIds: removed.map((a) => a.id) } });
                 }
                 if (request.method !== "POST") return json(405, { error: "Method not allowed" });
-                let raw = "";
+                const chunks = [];
+                let bytes = 0;
                 for await (const chunk of request) {
-                    raw += chunk;
-                    if (Buffer.byteLength(raw) > 10 * 1024 * 1024)
+                    bytes += chunk.length;
+                    if (bytes > 10 * 1024 * 1024)
                         return json(413, { error: "Annotation exceeds 10 MiB" });
+                    chunks.push(chunk);
                 }
+                const raw = Buffer.concat(chunks, bytes).toString("utf8");
                 let body;
                 try {
                     body = raw.trim() ? JSON.parse(raw) : {};
@@ -279,8 +364,13 @@ try {
                         return json(422, { error: "id and comment are required" });
                     if (store.deletedIds.has(body.id))
                         return json(410, { error: "Annotation was removed" });
-                    const { annotation, created } = store.create(body);
-                    if (created) notify();
+                    const { annotation, created, edited, locked } = store.create(body);
+                    if (locked)
+                        return json(409, {
+                            error: `This annotation is ${annotation.status.replaceAll("_", " ")}. It can no longer be edited.`,
+                        });
+                    if (edited) logActivity(annotation, "edited");
+                    if (created || edited) notify();
                     return json(created ? 201 : 200, { data: annotation });
                 }
                 const action = path.startsWith(`${base}/`) ? path.slice(base.length) : path;
@@ -323,7 +413,8 @@ try {
                 }
                 const match = path.slice(base.length).match(/^\/([^/]+)\/status$/);
                 if (!match) return json(404, { error: "Not found" });
-                const id = decodeURIComponent(match[1]);
+                const id = decodeId(match[1]);
+                if (!validId(id)) return json(422, { error: "Invalid annotation id" });
                 const current = store.find(id);
                 if (!current) return json(404, { error: "Annotation not found" });
                 if (

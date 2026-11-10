@@ -4,6 +4,8 @@ name: Release
 # npm trusts this workflow through OIDC trusted publishing, so no npm token is
 # stored. The trust names this repository and this file name: keep
 # .github/workflows/release.yml. Mac app releases will use mac-v* tags.
+# Actions are pinned to commits, because this job can publish. To update one,
+# replace its commit id and the version in the comment beside it.
 on:
   push:
     tags: ["v*"]
@@ -19,17 +21,27 @@ jobs:
       run:
         working-directory: packages/annotator
     steps:
+      # Full history, so the next step can compare the tag with main.
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Tag ${GITHUB_REF_NAME} is not on main. Publish only from main." >&2
+            exit 1
+          fi
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
 
       # npm 11.5+ (Node 24) is required for OIDC trusted publishing.
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 

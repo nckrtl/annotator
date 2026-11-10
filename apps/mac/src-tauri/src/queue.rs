@@ -24,9 +24,13 @@ struct Inner {
     items: Vec<Value>,
     failed_polls: u32,
     generation: u64,
-    /// The generation a download runs for. One at a time: a second caller asks for one more pass.
+    /// The generation a download runs for. One at a time: a second caller asks for one more pass
+    /// and waits for it.
     refreshing: Option<u64>,
-    needs_refresh: bool,
+    /// Refresh requests so far, and the last request the finished passes cover, with that pass's result.
+    requested: u64,
+    covered: u64,
+    covered_ok: bool,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -39,12 +43,16 @@ pub struct QueueMonitor {
     /// When a refresh succeeds after one or more failures.
     on_reachable: Callback,
     stream: reqwest::Client,
+    /// Wakes callers that wait for a pass, after each pass and each new run.
+    passes: tokio::sync::Notify,
+    /// Wakes a retention pass that waits for the server, after each successful load.
+    loaded: tokio::sync::Notify,
 }
 
 impl QueueMonitor {
     pub fn new(on_change: impl Fn() + Send + Sync + 'static, on_reachable: impl Fn() + Send + Sync + 'static) -> Arc<QueueMonitor> {
         Arc::new(QueueMonitor { inner: Mutex::default(), on_change: Box::new(on_change), on_reachable: Box::new(on_reachable),
-            stream: crate::http::event_stream() })
+            stream: crate::http::event_stream(), passes: Default::default(), loaded: Default::default() })
     }
 
     pub fn connection(&self) -> Connection {
@@ -70,10 +78,11 @@ impl QueueMonitor {
             inner.summary = None;
             inner.items = Vec::new();
             inner.failed_polls = 0;
-            inner.needs_refresh = false;
             inner.connection = Some(if client.is_some() { Connection::Connecting } else { Connection::InvalidUrl });
             inner.generation
         };
+        // Callers that wait for a pass of the old run get `false`.
+        self.passes.notify_waiters();
         (self.on_change)();
         let Some(client) = client else { return };
         let monitor = self.clone();
@@ -103,15 +112,28 @@ impl QueueMonitor {
     async fn retain_recent(&self, client: &AnnotationClient, generation: u64) {
         loop {
             if !self.current(generation) { return; }
+            // Listen before the pass, so a load that succeeds during it is not missed.
+            let loaded = self.loaded.notified();
+            tokio::pin!(loaded);
+            loaded.as_mut().enable();
+            let wait = Duration::from_secs(3600);
             match crate::retention::prune(client, chrono::Utc::now().timestamp_millis()).await {
                 Ok(report) => {
                     crate::log(&format!("Retention deleted count={} numbers={:?}; failed count={} numbers={:?}",
                         report.deleted.len(), report.deleted, report.failed.len(), report.failed));
                     if !report.deleted.is_empty() { self.refresh(client, generation).await; }
+                    tokio::time::sleep(wait).await;
                 }
-                Err(error) => crate::log(&format!("Retention failed: {error}")),
+                Err(QueueError::Unreachable(error)) => {
+                    // The server may not be up yet. Try again once a load succeeds, not an hour later.
+                    crate::log(&format!("Retention waits for the server: {error}"));
+                    tokio::select! { _ = loaded => {}, _ = tokio::time::sleep(wait) => {} }
+                }
+                Err(error) => {
+                    crate::log(&format!("Retention failed: {error}"));
+                    tokio::time::sleep(wait).await;
+                }
             }
-            tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     }
 
@@ -177,31 +199,53 @@ impl QueueMonitor {
         }
     }
 
-    /// One download at a time per generation. A second caller waits for one more pass instead of
-    /// starting its own.
+    /// One download at a time per generation. A second caller does not start its own: it waits for
+    /// the next pass, which starts after its request. Each caller returns the result of the first
+    /// pass that covers its request.
     async fn refresh(&self, client: &AnnotationClient, generation: u64) -> bool {
-        {
+        let request = {
             let mut inner = self.inner.lock().unwrap();
-            if inner.refreshing == Some(generation) {
-                inner.needs_refresh = true;
-                return true;
+            inner.requested += 1;
+            inner.requested
+        };
+        let mut covers = loop {
+            let passed = self.passes.notified();
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if inner.generation != generation {
+                    return false;
+                }
+                if inner.covered >= request {
+                    return inner.covered_ok;
+                }
+                if inner.refreshing != Some(generation) {
+                    inner.refreshing = Some(generation);
+                    break inner.requested;
+                }
             }
-            inner.refreshing = Some(generation);
-        }
-        let mut ok;
+            passed.await;
+        };
+        // Frees the slot and wakes the waiters also when this future is dropped mid-download.
+        let _pass = Pass { monitor: self, generation };
+        let mut first = None;
         loop {
-            self.inner.lock().unwrap().needs_refresh = false;
-            ok = self.load(client, generation).await;
-            let inner = self.inner.lock().unwrap();
-            if !inner.needs_refresh || inner.generation != generation {
-                break;
+            let ok = self.load(client, generation).await;
+            let result = *first.get_or_insert(ok);
+            let again = {
+                let mut inner = self.inner.lock().unwrap();
+                if covers > inner.covered {
+                    inner.covered = covers;
+                    inner.covered_ok = ok;
+                }
+                let again = inner.generation == generation && inner.requested > covers;
+                covers = inner.requested;
+                again
+            };
+            self.passes.notify_waiters();
+            if !again {
+                return result;
             }
         }
-        let mut inner = self.inner.lock().unwrap();
-        if inner.refreshing == Some(generation) {
-            inner.refreshing = None;
-        }
-        ok
     }
 
     async fn load(&self, client: &AnnotationClient, generation: u64) -> bool {
@@ -224,6 +268,7 @@ impl QueueMonitor {
                 if recovered {
                     (self.on_reachable)();
                 }
+                self.loaded.notify_waiters();
                 true
             }
             Err(QueueError::NotAnnotationServer) => {
@@ -253,6 +298,24 @@ impl QueueMonitor {
             inner.connection = Some(connection);
         }
         (self.on_change)();
+    }
+}
+
+/// The running download of one generation.
+struct Pass<'a> {
+    monitor: &'a QueueMonitor,
+    generation: u64,
+}
+
+impl Drop for Pass<'_> {
+    fn drop(&mut self) {
+        {
+            let mut inner = self.monitor.inner.lock().unwrap();
+            if inner.refreshing == Some(self.generation) {
+                inner.refreshing = None;
+            }
+        }
+        self.monitor.passes.notify_waiters();
     }
 }
 
@@ -314,6 +377,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_callers_get_the_result_of_their_pass() {
+        let server = serve(vec![Reply::new(200, BODY).delayed(200), Reply::new(503, "")]);
+        let (monitor, _) = monitor();
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (a, b, c) = tokio::join!(monitor.refresh(&client, 0), monitor.refresh(&client, 0), monitor.refresh(&client, 0));
+        assert_eq!((a, b, c), (true, false, false));
+        assert_eq!(server.paths().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stream_is_live_only_after_a_load_succeeds() {
+        // A slow failing refresh runs; the stream opens; the pass that covers the stream fails too.
+        let server = serve(vec![Reply::new(503, "").delayed(300), Reply::new(200, "data: change\n\n"), Reply::new(503, "")]);
+        let (monitor, _) = monitor();
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (running, _) = tokio::join!(monitor.refresh(&client, 0), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            monitor.listen(&client, 0).await;
+        });
+        assert!(!running);
+        // `listen` sets Polling only after Live.
+        assert_eq!(monitor.connection(), Connection::Connecting);
+        assert_eq!(server.paths(), ["/annotations?screenshots=0", "/annotations/events", "/annotations?screenshots=0"]);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_download_frees_the_slot() {
+        let server = serve(vec![Reply::new(200, BODY).delayed(500), Reply::new(200, BODY)]);
+        let (monitor, _) = monitor();
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (dropped, waiter) = tokio::join!(
+            tokio::time::timeout(Duration::from_millis(100), monitor.refresh(&client, 0)),
+            async { tokio::time::sleep(Duration::from_millis(20)).await; monitor.refresh(&client, 0).await });
+        assert!(dropped.is_err());
+        assert!(waiter);
+        assert_eq!(server.paths().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_new_run_releases_waiting_callers() {
+        let server = serve(vec![Reply::new(200, BODY).delayed(300)]);
+        let (monitor, _) = monitor();
+        let client = AnnotationClient::new(server.url("/annotations"));
+        let (_, waiter) = tokio::join!(monitor.refresh(&client, 0), async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let waiter = monitor.refresh(&client, 0);
+            tokio::pin!(waiter);
+            assert!(tokio::time::timeout(Duration::from_millis(20), waiter.as_mut()).await.is_err());
+            monitor.start(None);
+            waiter.await
+        });
+        assert!(!waiter);
+    }
+
+    #[tokio::test]
+    async fn retention_retries_after_the_server_comes_up() {
+        let url = closed_url("/annotations");
+        let (monitor, _) = monitor();
+        let retention = monitor.clone();
+        let base = url.clone();
+        let task = tokio::spawn(async move { retention.retain_recent(&AnnotationClient::new(base), 0).await });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let listener = std::net::TcpListener::bind(("127.0.0.1", url.port().unwrap())).unwrap();
+        let body = r#"{"data":[{"id":"old","number":3,"status":"done","completedAt":1,"comment":"fixture"}],"meta":{"service":"@nckrtl/annotator"}}"#;
+        let server = crate::testutil::serve_on(listener, vec![Reply::new(200, body)]);
+        assert!(monitor.refresh(&AnnotationClient::new(url), 0).await);
+        let deleted = tokio::time::timeout(Duration::from_secs(5), async {
+            while !server.paths().contains(&"/annotations/old".to_string()) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await;
+        task.abort();
+        assert!(deleted.is_ok(), "retention waited for the hourly pass");
+    }
+
+    #[tokio::test]
     async fn wrong_server_stops_the_run() {
         let server = serve(vec![Reply::new(404, ""), Reply::new(200, r#"{"data":[]}"#)]);
         let (monitor, _) = monitor();
@@ -331,6 +470,6 @@ mod tests {
         let (monitor, _) = monitor();
         monitor.listen(&AnnotationClient::new(server.url("/annotations")), 0).await;
         assert_eq!(monitor.connection(), Connection::Polling);
-        assert_eq!(server.paths()[..3], ["/annotations/events", "/annotations", "/annotations"]);
+        assert_eq!(server.paths()[..3], ["/annotations/events", "/annotations?screenshots=0", "/annotations?screenshots=0"]);
     }
 }

@@ -8,6 +8,8 @@ let revision = 0;
 let annotation;
 let queueRecords = [];
 let discoveryService = "@nckrtl/annotator";
+/** DELETE requests to the queue server, which acts like one from before site removal. */
+const queueDeletes = [];
 const streams = new Set();
 let subscriptions = 0;
 const send = () => {
@@ -69,6 +71,13 @@ const server = createServer(async (request, response) => {
         response.end(
             `<h1>Queue target</h1><script type="module">import { mountAnnotation } from "/index.js"; mountAnnotation({${url.pathname === "/explicit" ? 'serverUrl:"/queue/annotations",' : 'discoverServerUrl:"/queue/annotations",'}dictation:{autoStart:false}});</script>`,
         );
+    } else if (url.pathname.startsWith("/queue/annotations") && request.method === "DELETE") {
+        queueDeletes.push(url.pathname + url.search);
+        const id = url.pathname.slice("/queue/annotations/".length);
+        // Like an older server: without an id, everything goes.
+        queueRecords = id ? queueRecords.filter((record) => record.id !== id) : [];
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ data: { removedIds: [id] } }));
     } else if (url.pathname === "/queue/annotations") {
         response.setHeader("Content-Type", "application/json");
         response.end(JSON.stringify({ data: queueRecords, meta: { service: discoveryService } }));
@@ -202,7 +211,12 @@ try {
         "/annotations",
     );
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    local = spawn(process.execPath, ["bin/serve.mjs", "serve"]);
+    local = spawn(process.execPath, [
+        "bin/serve.mjs",
+        "serve",
+        "--allow-origin",
+        new URL(page.url()).origin,
+    ]);
     const localUrl = await new Promise((resolve, reject) => {
         let output = "";
         const timeout = setTimeout(() => reject(new Error("Local server startup timed out")), 5000);
@@ -260,6 +274,17 @@ try {
     assert.equal(list.data[0].threadId, undefined, "Server mode skips the transport");
     assert.deepEqual(list.data[0].metadata, { session: "s-1" }, "Metadata reaches the server");
     assert.notEqual(annotation.comment, "Local only", "Local submissions bypass the transport");
+    // An edit of a saved pin reaches the server and stays on the pin.
+    const edited = page.waitForResponse(
+        (response) => response.url() === localUrl && response.request().method() === "POST",
+    );
+    await page.locator("textarea").fill("Local edited");
+    await page.locator("[data-annotation-submit]").click();
+    assert.equal((await edited).status(), 200);
+    assert.equal((await (await fetch(localUrl)).json()).data[0].comment, "Local edited");
+    await page.waitForTimeout(600);
+    await page.getByRole("button", { name: "Edit annotation 1", exact: true }).click();
+    assert.equal(await page.locator("textarea").inputValue(), "Local edited");
     const status = async (value) =>
         fetch(`${localUrl}/${list.data[0].id}/status`, {
             method: "POST",
@@ -268,6 +293,15 @@ try {
         });
     await status("in_progress");
     await page.getByRole("button", { name: "In progress annotation 1" }).waitFor({ timeout: 5000 });
+    // The server refuses an edit of claimed work. The pin keeps the new text and says why,
+    // also after later lists, until the server has something newer.
+    await page.locator("textarea").fill("Too late");
+    await page.locator("[data-annotation-submit]").click();
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "In progress annotation 1" }).click();
+    assert.equal(await page.locator("textarea").inputValue(), "Too late");
+    await page.getByText("It can no longer be edited.", { exact: false }).waitFor();
+    assert.equal((await (await fetch(localUrl)).json()).data[0].comment, "Local edited");
     const transition = async (action, fields) => {
         const response = await fetch(`${localUrl}/${action}`, {
             method: "POST",
@@ -288,7 +322,7 @@ try {
     await claimedPin.waitFor({ timeout: 5000 });
     assert.equal(
         await claimedPin.getAttribute("title"),
-        "In progress: Local only",
+        "In progress: Local edited",
         "Live claim clears the question without reloading",
     );
     assert.equal(await questionPin.count(), 0);
@@ -419,6 +453,25 @@ try {
     await queuePage.goto(`${origin}/explicit`);
     await queuePage.getByRole("button", { name: "Enter annotation mode", exact: true }).click();
     await queuePage.getByRole("button", { name: "Edit annotation 4", exact: true }).waitFor();
+    // The bin removes this site's annotations. This server cannot do that in one request,
+    // so the page removes them one by one and leaves other sites and apps alone.
+    queueRecords = [
+        { ...queueRecords[0], url: `${origin}/explicit` },
+        { ...queueRecords[0], id: "other-site", number: 5, url: "https://other.test/explicit" },
+        { ...queueRecords[0], id: "desktop", number: 6, url: "app://com.apple.mail" },
+    ];
+    await queuePage.getByRole("button", { name: "Clear all annotations" }).click();
+    await queuePage.waitForFunction(
+        () =>
+            !document
+                .querySelector("#laravel-toolbar-annotation-host")
+                .shadowRoot.querySelector("[data-annotation-marker]"),
+    );
+    assert.deepEqual(queueDeletes, ["/queue/annotations/explicit-pin"]);
+    assert.deepEqual(
+        queueRecords.map((record) => record.id),
+        ["other-site", "desktop"],
+    );
     discoveryService = "not-annotator";
     const refusedPage = await queueContext.newPage();
     await refusedPage.goto(`${origin}/discover`);

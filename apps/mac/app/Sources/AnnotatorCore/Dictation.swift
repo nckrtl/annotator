@@ -87,6 +87,10 @@ import Observation
     public func finish() async throws {
         let session = generation
         defer { release("finish-exit") }
+        try Task.checkCancellation()
+        // A dictation that already failed and ended keeps its message until now. It must not
+        // block the user's own text. A failure during this finish still blocks it below.
+        if phase == "idle" { error = nil; return }
         do {
             try await withTaskCancellationHandler {
                 await startTask?.value

@@ -262,18 +262,11 @@ struct MenuPanel: View {
 
 /// One recent annotation, styled like Operator's transcript row: the source app's icon, the
 /// comment, a detail line, and the status icon at the end. The whole row opens the annotation.
-private struct MenuAnnotationRow: View {
+struct MenuAnnotationRow: View {
     let item: JSON
     let action: () -> Void
     @State private var hovering = false
-    private var status: (icon: KitIcon, label: String) {
-        if item["question"].bool { return (.warning, "Question") }
-        switch item["status"].string {
-        case "done": return (.done, "Done")
-        case "todo": return (.clock, "To do")
-        default: return (.sync, "In progress")
-        }
-    }
+    private var status: AnnotationStatus { AnnotationStatus(item) }
     private var details: String {
         let app = item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string
         return [app, item["native"]["project"].string].filter { !$0.isEmpty }.joined(separator: " · ")
@@ -284,14 +277,24 @@ private struct MenuAnnotationRow: View {
     static func timestamp(_ milliseconds: Double, now: Date = Date(), calendar: Calendar = .current) -> String {
         guard milliseconds > 0 else { return "" }
         let date = Date(timeIntervalSince1970: milliseconds / 1000)
-        let clock = DateFormatter(); clock.calendar = calendar; clock.timeZone = calendar.timeZone; clock.setLocalizedDateFormatFromTemplate("jmm")
+        // `body` calls this for every row, so the formatters are made once and reset only when the calendar changes.
+        if formatted != calendar {
+            formatted = calendar
+            clock.calendar = calendar; clock.timeZone = calendar.timeZone; clock.setLocalizedDateFormatFromTemplate("jmm")
+            day.timeZone = calendar.timeZone
+        }
         let time = clock.string(from: date)
         let diff = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
         if diff == 0 { return time }
         if diff == 1 { return "\(time) - Yesterday" }
-        let day = DateFormatter(); day.locale = Locale(identifier: "en_US_POSIX"); day.calendar = Calendar(identifier: .gregorian); day.timeZone = calendar.timeZone; day.dateFormat = "yyyy-MM-dd"
         return "\(time) - \(day.string(from: date))"
     }
+    private static var formatted: Calendar?
+    private static let clock = DateFormatter()
+    private static let day: DateFormatter = {
+        let day = DateFormatter(); day.locale = Locale(identifier: "en_US_POSIX"); day.calendar = Calendar(identifier: .gregorian); day.dateFormat = "yyyy-MM-dd"
+        return day
+    }()
     var body: some View {
         Button(action: action) {
             // The first line's cap height starts at the icon's top edge, as in Operator.

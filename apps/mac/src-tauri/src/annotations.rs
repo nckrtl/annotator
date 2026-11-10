@@ -212,9 +212,12 @@ impl AnnotationClient {
         }
     }
 
-    /// The full records, and the summary of them.
+    /// The records without screenshots, and the summary of them. `screenshots=0` asks the server
+    /// to leave them out; older servers ignore it and send them, so they are dropped here too.
     pub async fn queue(&self) -> Result<(QueueSummary, Vec<Value>), QueueError> {
-        let response = self.http.get(self.base.clone()).send().await
+        let mut url = self.base.clone();
+        url.query_pairs_mut().append_pair("screenshots", "0");
+        let response = self.http.get(url).send().await
             .map_err(|error| QueueError::Unreachable(describe(&error)))?;
         let status = response.status().as_u16();
         if status != 200 {
@@ -227,10 +230,21 @@ impl AnnotationClient {
         Ok((QueueSummary::new(&items), items))
     }
 
-    /// The screenshot for one record. The live queue does not keep these.
+    /// The screenshot for one record. The live queue does not keep these. Reads `GET <base>/<id>`;
+    /// a server that does not know that route (older ones answer 405) gets the full list instead.
     pub async fn screenshot(&self, id: &str) -> Option<String> {
         if !is_valid_id(id) {
             return None;
+        }
+        let response = self.http.get(self.appending(id)).send().await.ok()?;
+        match response.status().as_u16() {
+            200 => {
+                let body: Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
+                let item = &body["data"];
+                return if item["id"].as_str() == Some(id) { item["screenshot"].as_str().map(String::from) } else { None };
+            }
+            404 => return None,
+            _ => {}
         }
         let response = self.http.get(self.base.clone()).send().await.ok()?;
         if response.status().as_u16() != 200 {
@@ -466,14 +480,42 @@ mod tests {
     async fn queue_drops_screenshots() {
         let body = r#"{"data":[{"id":"a","number":1,"status":"todo","comment":"x","screenshot":"data:image/jpeg;base64,AAAA"}],
          "meta":{"service":"@nckrtl/annotator"}}"#;
+        // An older server ignores `screenshots=0` and sends them anyway.
         let server = serve(vec![Reply::new(200, body)]);
         let client = AnnotationClient::new(server.url("/annotations"));
         let (summary, items) = client.queue().await.unwrap();
         assert!(summary.item("a").unwrap()["screenshot"].is_null());
         assert!(items[0]["screenshot"].is_null());
+        assert_eq!(server.paths(), ["/annotations?screenshots=0"]);
+        assert_eq!(client.screenshot("../secret").await, None);
+        assert_eq!(server.paths().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn screenshot_reads_one_record() {
+        let one = r#"{"data":{"id":"a","number":1,"status":"todo","screenshot":"data:image/jpeg;base64,AAAA"}}"#;
+        let other = r#"{"data":{"id":"b","screenshot":"data:image/jpeg;base64,BBBB"}}"#;
+        let server = serve(vec![Reply::new(200, one), Reply::new(404, r#"{"error":"Not found"}"#), Reply::new(200, other)]);
+        let client = AnnotationClient::new(server.url("/annotations"));
+        assert_eq!(client.screenshot("a").await.as_deref(), Some("data:image/jpeg;base64,AAAA"));
+        assert_eq!(client.screenshot("gone").await, None);
+        // A reply for another record is not used.
+        assert_eq!(client.screenshot("c").await, None);
+        assert_eq!(server.paths(), ["/annotations/a", "/annotations/gone", "/annotations/c"]);
+    }
+
+    #[tokio::test]
+    async fn screenshot_falls_back_to_the_list_on_older_servers() {
+        let list = r#"{"data":[{"id":"a","number":1,"status":"todo","screenshot":"data:image/jpeg;base64,AAAA"}],
+         "meta":{"service":"@nckrtl/annotator"}}"#;
+        let server = serve(vec![Reply::new(405, r#"{"error":"Method not allowed"}"#), Reply::new(200, list),
+            Reply::new(405, ""), Reply::new(200, list), Reply::new(500, ""), Reply::new(200, r#"{"data":[{"id":"a","screenshot":"x"}]}"#)]);
+        let client = AnnotationClient::new(server.url("/annotations"));
         assert_eq!(client.screenshot("a").await.as_deref(), Some("data:image/jpeg;base64,AAAA"));
         assert_eq!(client.screenshot("b").await, None);
-        assert_eq!(client.screenshot("../secret").await, None);
+        // The list must come from the annotation server.
+        assert_eq!(client.screenshot("a").await, None);
+        assert_eq!(server.paths(), ["/annotations/a", "/annotations", "/annotations/b", "/annotations", "/annotations/a", "/annotations"]);
     }
 
     #[test]

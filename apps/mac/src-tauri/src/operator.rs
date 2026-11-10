@@ -150,18 +150,22 @@ impl OperatorClient {
 enum Kind {
     Start,
     Cancel,
+    Stop,
 }
 
 /// Runs start and cancel one at a time. A cancel waits for a start in flight, is skipped when that
 /// start found no dictation, and is sent once: a second cancel without a start between is a no-op.
 /// A stop waits for the commands before it but does not hold the queue, so a cancel can follow it.
+/// A stop that ended the dictation (ok, no dictation or silence) makes the next cancel a no-op;
+/// after a failed stop, a cancel still goes out to clean up.
 pub struct OperatorQueue {
-    last: tokio::sync::Mutex<Option<(Kind, OperatorResult)>>,
+    /// A generation that each recorded command raises, and the last recorded command.
+    last: tokio::sync::Mutex<(u64, Option<(Kind, OperatorResult)>)>,
 }
 
 impl Default for OperatorQueue {
     fn default() -> Self {
-        OperatorQueue { last: tokio::sync::Mutex::new(None) }
+        OperatorQueue { last: tokio::sync::Mutex::new((0, None)) }
     }
 }
 
@@ -173,23 +177,34 @@ impl OperatorQueue {
             "start" => {
                 let mut last = self.last.lock().await;
                 let result = client.start().await;
-                *last = Some((Kind::Start, result.clone()));
+                last.0 += 1;
+                last.1 = Some((Kind::Start, result.clone()));
                 Ok(answer(result))
             }
             "cancel" => {
                 let mut last = self.last.lock().await;
-                match &*last {
-                    Some((_, OperatorResult::NoDictation)) => return Ok(answer(OperatorResult::Ok)),
+                match &last.1 {
+                    Some((_, OperatorResult::NoDictation)) | Some((Kind::Stop, _)) => return Ok(answer(OperatorResult::Ok)),
                     Some((Kind::Cancel, previous)) => return Ok(answer(previous.clone())),
                     _ => {}
                 }
                 let result = client.cancel().await;
-                *last = Some((Kind::Cancel, result.clone()));
+                last.0 += 1;
+                last.1 = Some((Kind::Cancel, result.clone()));
                 Ok(answer(result))
             }
             "stop" => {
-                drop(self.last.lock().await);
-                Ok(answer(client.stop().await))
+                let generation = self.last.lock().await.0;
+                let result = client.stop().await;
+                // A cancel can run while the stop is in flight. A late stop must not overwrite
+                // a newer start or cancel, and a failed stop must not hide a cleanup cancel.
+                let mut last = self.last.lock().await;
+                if last.0 == generation
+                    && matches!(result, OperatorResult::Ok | OperatorResult::NoDictation | OperatorResult::Silence) {
+                    last.0 += 1;
+                    last.1 = Some((Kind::Stop, result.clone()));
+                }
+                Ok(answer(result))
             }
             _ => Err(format!("Unknown Operator action: {action}")),
         }
@@ -308,5 +323,64 @@ mod tests {
         assert_eq!(queue.run(&operator, "start").await.unwrap().result, OperatorResult::NoDictation);
         assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
         assert_eq!(server.paths(), ["/dictate/start"]);
+    }
+
+    /// A stop that ended the dictation makes the next cancel a no-op, until a new start.
+    #[tokio::test]
+    async fn finished_stop_skips_the_next_cancel() {
+        for status in [200, 409, 422] {
+            let server = serve(vec![Reply::new(202, ""), Reply::new(status, ""), Reply::new(202, "")]);
+            let operator = client(server.url(""));
+            let queue = OperatorQueue::default();
+            queue.run(&operator, "start").await.unwrap();
+            queue.run(&operator, "stop").await.unwrap();
+            assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
+            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop"]);
+            queue.run(&operator, "start").await.unwrap();
+            queue.run(&operator, "cancel").await.unwrap();
+            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/start", "/dictate/cancel"]);
+        }
+    }
+
+    /// After a failed stop, the cancel still goes out to clean up.
+    #[tokio::test]
+    async fn failed_stop_still_sends_cancel() {
+        for status in [500, 401] {
+            let server = serve(vec![Reply::new(202, ""), Reply::new(status, ""), Reply::new(202, "")]);
+            let operator = client(server.url(""));
+            let queue = OperatorQueue::default();
+            queue.run(&operator, "start").await.unwrap();
+            queue.run(&operator, "stop").await.unwrap();
+            queue.run(&operator, "cancel").await.unwrap();
+            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel"]);
+        }
+        let server = serve(vec![Reply::new(202, "")]);
+        let queue = OperatorQueue::default();
+        queue.run(&client(server.url("")), "start").await.unwrap();
+        assert_eq!(queue.run(&client(closed_url("")), "stop").await.unwrap().result, OperatorResult::NotRunning);
+        queue.run(&client(server.url("")), "cancel").await.unwrap();
+        assert_eq!(server.paths(), ["/dictate/start", "/dictate/cancel"]);
+    }
+
+    /// A cancel goes out while a stop is in flight, and the late stop leaves a newer start's state alone.
+    #[tokio::test]
+    async fn cancel_interrupts_stop_and_late_stop_keeps_new_start() {
+        let server = serve(vec![Reply::new(202, ""), Reply::new(200, "").delayed(300), Reply::new(202, "")]);
+        let operator = client(server.url(""));
+        let queue = Arc::new(OperatorQueue::default());
+        queue.run(&operator, "start").await.unwrap();
+        let (q, c) = (queue.clone(), operator.clone());
+        let stop = tokio::spawn(async move { q.run(&c, "stop").await });
+        for _ in 0..100 {
+            if server.paths().len() >= 2 { break; }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert_eq!(server.paths().len(), 2);
+        queue.run(&operator, "cancel").await.unwrap();
+        queue.run(&operator, "start").await.unwrap();
+        assert!(!stop.is_finished());
+        assert_eq!(stop.await.unwrap().unwrap().result, OperatorResult::Ok);
+        queue.run(&operator, "cancel").await.unwrap();
+        assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel", "/dictate/start", "/dictate/cancel"]);
     }
 }

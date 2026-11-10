@@ -24,10 +24,16 @@ import {
     clearSyncedAnnotations,
     deleteSyncedAnnotation,
     fetchAnnotationSync,
+    keepsLocalChange,
     pushAnnotation,
 } from "./sync";
 import type { Annotation, AnnotationDraft } from "./types";
-import { currentBreakpoint, currentScreenSize, currentScrollPosition } from "./viewport";
+import {
+    annotationViewportBox,
+    currentBreakpoint,
+    currentScreenSize,
+    currentScrollPosition,
+} from "./viewport";
 
 let currentPathname = "";
 let annotationGeneration = 0;
@@ -78,6 +84,7 @@ export function draftFromPoint(clientX: number, clientY: number): AnnotationDraf
         pathname: window.location.pathname,
         screenSize: currentScreenSize(),
         scrollPosition: currentScrollPosition(),
+        scrollOffset: { x: window.scrollX, y: window.scrollY },
         breakpoint: currentBreakpoint(),
         ...resolveAnnotationContext(element),
     };
@@ -333,9 +340,14 @@ export function applyCreatedAnnotations(incoming: Annotation[]): void {
             continue;
         }
 
+        // The Mac app marks its records with "native". They have no place on a page, also
+        // when they are about a browser window that shows this page.
+        if ("native" in annotation) continue;
+
         const existing = next.get(annotation.id);
 
         if (existing && (existing.revision ?? 0) > (annotation.revision ?? 0)) continue;
+        if (keepsLocalChange(existing, annotation)) continue;
 
         if (
             existing &&
@@ -518,10 +530,13 @@ function resetPagePins(): void {
     annotations.value = [];
 }
 
-/** Local server mode removes stored work; transports only dismiss browser pins. */
+/**
+ * Local server mode removes the stored work of this site; transports only dismiss browser pins.
+ * A store can hold other sites and apps, so the removal names this site's origin.
+ */
 export function clearAllAnnotations(): void {
     annotationGeneration += 1;
-    void clearSyncedAnnotations().then((removed) => {
+    void clearSyncedAnnotations({ origin: window.location.origin }).then((removed) => {
         if (!removed) return;
         resetPagePins();
         clearStoredAnnotations();
@@ -532,7 +547,7 @@ export function clearAllAnnotations(): void {
 export function clearPageAnnotations(): void {
     const pathname = currentPathname || window.location.pathname;
     annotationGeneration += 1;
-    void clearSyncedAnnotations(pathname).then((removed) => {
+    void clearSyncedAnnotations({ pathname }).then((removed) => {
         if (!removed) return;
         dismissAnnotations(loadAnnotations(pathname).map((annotation) => annotation.id));
         saveAnnotations([], pathname);
@@ -562,7 +577,7 @@ export function cancelDraft(): void {
 }
 
 function resolveTargetElement(annotation: Annotation): HTMLElement | undefined {
-    const box = annotation.boundingBox;
+    const box = annotationViewportBox(annotation, { x: window.scrollX, y: window.scrollY });
 
     if (!box || box.width === 0 || box.height === 0) {
         return undefined;
@@ -586,10 +601,12 @@ function resolveTargetElement(annotation: Annotation): HTMLElement | undefined {
 }
 
 export function startEdit(annotation: Annotation, clientX?: number, clientY?: number): void {
-    const box = annotation.boundingBox;
+    const box = annotationViewportBox(annotation, { x: window.scrollX, y: window.scrollY });
 
     draft.value = {
         ...annotationContextFields(annotation),
+        scrollPosition: currentScrollPosition(),
+        scrollOffset: { x: window.scrollX, y: window.scrollY },
         annotationId: annotation.id,
         x: annotation.x,
         y: annotation.y,
@@ -752,6 +769,8 @@ export function handleKeyDown(event: KeyboardEvent): void {
         !event.altKey &&
         (shortcut === "a" || shortcut === "r")
     ) {
+        // Outside annotation mode this key stays the browser's hard reload.
+        if (shortcut === "r" && !annotationMode.value) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         if (!event.repeat) {
@@ -768,7 +787,8 @@ export function handleKeyDown(event: KeyboardEvent): void {
         !event.ctrlKey &&
         !event.altKey
     ) {
-        if (isUnrelatedEditable(event.target)) {
+        // Inside a shadow root the event's target is the host; the path has the real field.
+        if (isUnrelatedEditable(event.composedPath()[0] ?? event.target)) {
             return;
         }
 

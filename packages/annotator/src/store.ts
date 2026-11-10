@@ -41,10 +41,20 @@ export function saveAnnotations(
     }
 
     try {
-        localStorage.setItem(storageKey(pathname), JSON.stringify(annotations));
+        localStorage.setItem(storageKey(pathname), JSON.stringify(annotations.map(cached)));
     } catch {
         // Quota or private-mode failures should not break annotation mode.
     }
+}
+
+/**
+ * A stored record keeps its screenshot on the server or the transport. The cache keeps the image
+ * only while the record still has to be delivered, so a few pins cannot fill the site's storage.
+ */
+function cached(annotation: Annotation): Annotation {
+    if (typeof annotation.revision !== "number" || annotation.syncError) return annotation;
+    const { screenshot: _screenshot, ...rest } = annotation;
+    return rest;
 }
 
 export function createAnnotationId(): string {

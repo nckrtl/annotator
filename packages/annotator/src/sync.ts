@@ -154,7 +154,8 @@ export function configureAnnotationService(
 }
 /** Use the same transport for connection checks and annotation writes. */
 export function resolveAnnotationServerUrl(value: string): string {
-    const url = value.trim().replace(/\/$/, "");
+    // A fragment never reaches the server, and it would swallow what is added to the URL.
+    const url = value.trim().replace(/#.*$/, "").replace(/\/$/, "");
     if (!url) throw new Error("Enter an annotation server URL.");
     const target = new URL(url, window.location.href);
     if (!["http:", "https:"].includes(target.protocol))
@@ -194,6 +195,38 @@ export function parseAnnotation(value: unknown): Annotation | null {
             item.status === "todo" ? "pending" : item.status === "done" ? "resolved" : item.status,
     } as Annotation;
 }
+/** `endpoint` with a path segment and query values added. Keeps a query the endpoint has. */
+function endpointUrl(endpoint: string, segment = "", query: Record<string, string> = {}): string {
+    const mark = endpoint.indexOf("?");
+    const path = mark < 0 ? endpoint : endpoint.slice(0, mark);
+    const values = new URLSearchParams(mark < 0 ? "" : endpoint.slice(mark + 1));
+    for (const [key, value] of Object.entries(query)) values.set(key, value);
+    const search = values.toString();
+    return `${path}${segment ? `/${encodeURIComponent(segment)}` : ""}${search ? `?${search}` : ""}`;
+}
+function siteOf(url: string): string | undefined {
+    try {
+        return new URL(url, window.location.href).origin;
+    } catch {
+        return undefined;
+    }
+}
+/** An address that is no web address, such as a desktop app's, is another site too. */
+function isOtherSite(url: string | undefined): boolean {
+    return Boolean(url) && siteOf(url!) !== window.location.origin;
+}
+/**
+ * A change that the server did not accept stays on the pin, with its error, until the server
+ * has something newer. Otherwise the next list would silently put the old text back.
+ */
+export function keepsLocalChange(local: Annotation | undefined, incoming: Annotation): boolean {
+    return (
+        local?.delivery === "error" &&
+        incoming.delivery !== "error" &&
+        !["resolved", "cancelled"].includes(incoming.status ?? "pending") &&
+        (local.revision ?? 0) >= (incoming.revision ?? 0)
+    );
+}
 function receive(value: unknown): Annotation | null {
     const annotation = parseAnnotation(value);
     if (annotation) rememberNumber(annotation.number);
@@ -204,9 +237,19 @@ function receive(value: unknown): Annotation | null {
     )
         return null;
     revisions.set(annotation.id, annotation.revision);
+    // A shared server also holds other sites and desktop apps. Do not cache their records.
+    if (isOtherSite(annotation.url)) return annotation;
     // Update all paths, including pages not currently mounted, before advancing the event cursor.
     const path = annotation.pathname || window.location.pathname;
-    const existing = loadAnnotations(path).filter((a) => a.id !== annotation.id);
+    const cached = loadAnnotations(path);
+    if (
+        keepsLocalChange(
+            cached.find((a) => a.id === annotation.id),
+            annotation,
+        )
+    )
+        return annotation;
+    const existing = cached.filter((a) => a.id !== annotation.id);
     saveAnnotations(
         annotation.status === "resolved" || annotation.status === "cancelled"
             ? existing
@@ -349,10 +392,15 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
         }
     } else if (serviceUrl) {
         try {
-            const result = (await request(serviceUrl)) as {
+            // Screenshots stay on the server; the pins do not need them.
+            const result = (await request(endpointUrl(serviceUrl, "", { screenshots: "0" }))) as {
                 annotations?: unknown[];
                 data?: unknown[];
-                meta?: { eventsUrl?: string; lastNumber?: number; deletedIds?: string[] };
+                meta?: {
+                    eventsUrl?: string;
+                    lastNumber?: number;
+                    deletedIds?: string[];
+                };
             };
             if (current !== generation) return summary([]);
             serviceConnection.setState("Connected");
@@ -425,8 +473,14 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
         }
         // Poll only when no event would tell us about a change, and never from a hidden tab.
         const hidden = () => document.visibilityState === "hidden";
+        // A stream can die without closing, for example after sleep. So an open stream slows
+        // the poll down to once a minute; it does not stop it.
+        const streaming = () => stream?.readyState === EventSource.OPEN;
+        let ticks = 0;
         const timer = setInterval(() => {
-            if (!hidden() && !connection?.live()) void refresh();
+            ticks++;
+            if (hidden() || connection?.live() || (streaming() && ticks % 4 !== 0)) return;
+            void refresh();
         }, 15000);
         const onVisible = () => {
             if (!hidden() && !connection?.live()) void refresh();
@@ -448,23 +502,35 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
         stop();
     };
 }
-async function removeLocalAnnotations(scope: { id?: string; pathname?: string }): Promise<boolean> {
-    const { id, pathname } = scope;
+type RemovalScope = { id?: string; pathname?: string; origin?: string };
+async function removeLocalAnnotations(scope: RemovalScope): Promise<boolean> {
+    const { id, pathname, origin } = scope;
     removalError.setState("");
     if (settings.mode !== "server" || !serviceUrl) return true;
     const endpoint = serviceUrl;
-    const target = id
-        ? `${endpoint}/${encodeURIComponent(id)}`
-        : pathname !== undefined
-          ? `${endpoint}?pathname=${encodeURIComponent(pathname)}`
-          : endpoint;
+    const remove = async (url: string) => {
+        const response = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(10000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    };
     try {
         await mutateLocal(endpoint, async () => {
-            const response = await fetch(target, {
-                method: "DELETE",
-                signal: AbortSignal.timeout(10000),
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (id) return remove(endpointUrl(endpoint, id));
+            if (pathname !== undefined) return remove(endpointUrl(endpoint, "", { pathname }));
+            if (origin === undefined) return remove(endpoint);
+            // An older server ignores "origin" and clears the whole store. So ask the server
+            // first, right before the request, and remove one by one when it cannot do this.
+            const list = (await request(endpointUrl(endpoint, "", { screenshots: "0" }))) as {
+                annotations?: unknown[];
+                data?: unknown[];
+                meta?: { removesBySite?: boolean };
+            };
+            if (list.meta?.removesBySite === true)
+                return remove(endpointUrl(endpoint, "", { origin }));
+            for (const value of list.annotations ?? list.data ?? []) {
+                const record = parseAnnotation(value);
+                if (record?.url && siteOf(record.url) === origin)
+                    await remove(endpointUrl(endpoint, record.id));
+            }
         });
         return true;
     } catch {
@@ -478,8 +544,11 @@ async function removeLocalAnnotations(scope: { id?: string; pathname?: string })
         return false;
     }
 }
-export function clearSyncedAnnotations(pathname?: string): Promise<boolean> {
-    return removeLocalAnnotations({ pathname });
+/** Remove the annotations of one page or one site from the local server. */
+export function clearSyncedAnnotations(
+    scope: { pathname?: string; origin?: string } = {},
+): Promise<boolean> {
+    return removeLocalAnnotations(scope);
 }
 export async function deleteSyncedAnnotation(id: string): Promise<boolean> {
     if (!(await removeLocalAnnotations({ id }))) return false;

@@ -58,7 +58,7 @@ mod tests {
         let server = serve(vec![Reply::new(200, &body), Reply::new(200, "{}"), Reply::new(404, "{}")]);
         let client = AnnotationClient::new(server.url("/annotations"));
         assert_eq!(prune(&client, now).await.unwrap(), Report { deleted: vec![Some(1), Some(2)], failed: vec![] });
-        assert_eq!(server.paths(), ["/annotations", "/annotations/old", "/annotations/fallback"]);
+        assert_eq!(server.paths(), ["/annotations?screenshots=0", "/annotations/old", "/annotations/fallback"]);
         assert_eq!(server.request(1).method, "DELETE");
         assert_eq!(server.request(2).method, "DELETE");
     }
@@ -68,7 +68,7 @@ mod tests {
         let wrong = serve(vec![Reply::new(200, r#"{"data":[]}"#)]);
         assert_eq!(prune(&AnnotationClient::new(wrong.url("/annotations")), DAY_MS*3).await,
             Err(QueueError::NotAnnotationServer));
-        assert_eq!(wrong.paths(), ["/annotations"]);
+        assert_eq!(wrong.paths(), ["/annotations?screenshots=0"]);
         let body = r#"{"meta":{"service":"@nckrtl/annotator"},"data":[{"id":"old","number":3,"status":"done","completedAt":1,"comment":"fixture"}]}"#;
         let server = serve(vec![Reply::new(200, body), Reply::new(500, "{}")]);
         assert_eq!(prune(&AnnotationClient::new(server.url("/annotations")), DAY_MS*3).await.unwrap(),
