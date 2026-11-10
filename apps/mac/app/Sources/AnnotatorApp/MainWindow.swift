@@ -75,7 +75,7 @@ struct AnnotationList: View {
                             Text("\(item["number"].int)").font(.kitDetail.weight(.semibold)).monospacedDigit()
                                 .frame(width: 26, height: 26).background(Color.kitTile, in: RoundedRectangle(cornerRadius: 7))
                         } trailing: {
-                            KitIconImage(item["question"].bool ? .warning : item["status"].string == "done" ? .done : item["status"].string == "todo" ? .clock : .sync, size: 12).foregroundStyle(.secondary)
+                            KitIconImage(AnnotationStatus(item).icon, size: 12).foregroundStyle(.secondary)
                         }.contextMenu { AnnotationMenu { deleting = item["id"].string } }.id(item["id"].string)
                     }
                 }.padding(Kit.columnMargin).padding(.bottom, 28)
@@ -120,7 +120,7 @@ struct AnnotationList: View {
         }
     }
     /// The annotations on this page that an archive removes: the finished ones, or all of them.
-    private var archiving: [JSON] { model.filtered.filter { archive == "all" || $0["status"].string == "done" } }
+    private var archiving: [JSON] { model.filtered.filter { archive == "all" || !AnnotationCollection.isOpen($0) } }
     private var archiveTitle: String {
         let count = archiving.count
         return "Archive \(count) \(archive == "all" ? "" : "finished ")annotation\(count == 1 ? "" : "s") on \(model.pageTitle)?"
@@ -152,6 +152,20 @@ struct AnnotationList: View {
         model.selected = items[max(0, min(items.count - 1, index + offset))]["id"].string
     }
 }
+/// The icon and label for an annotation's status, the same in the library and the menu.
+struct AnnotationStatus {
+    let icon: KitIcon
+    let label: String
+    init(_ item: JSON) {
+        if item["question"].bool { (icon, label) = (.warning, "Question"); return }
+        switch item["status"].string {
+        case "todo": (icon, label) = (.clock, "To do")
+        case "in_progress": (icon, label) = (.sync, "In progress")
+        case "cancelled": (icon, label) = (.clear, "Cancelled")
+        default: (icon, label) = (.done, "Done")
+        }
+    }
+}
 struct AnnotationRow: View {
     let item: JSON
     var body: some View {
@@ -162,7 +176,7 @@ struct AnnotationRow: View {
                 Text(item["comment"].string).font(.kitBody).lineLimit(1)
                 Text(item["native"]["app"]["name"].string.isEmpty ? item["pathname"].string : item["native"]["app"]["name"].string).font(.kitDetail).foregroundStyle(.secondary).lineLimit(1)
             }.frame(maxWidth: .infinity, alignment: .leading)
-            KitIconImage(item["question"].bool ? .warning : item["status"].string == "done" ? .done : item["status"].string == "todo" ? .clock : .sync, size: 12).foregroundStyle(.secondary)
+            KitIconImage(AnnotationStatus(item).icon, size: 12).foregroundStyle(.secondary)
         }.contentShape(Rectangle())
     }
 }

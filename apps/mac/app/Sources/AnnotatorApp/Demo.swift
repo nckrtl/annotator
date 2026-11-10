@@ -31,12 +31,13 @@ import ScreenCaptureKit
             item(214, "Align the title with the list below", "Finder", "in_progress"),
             item(213, "Keep this sidebar open after navigation", "Safari", "todo"),
             item(212, "Give the search field more space", "Notes", "done"),
-            item(211, "Use a clearer empty-state message", "Safari", "done")
+            item(211, "Use a clearer empty-state message", "Safari", "done"),
+            item(210, "Move the banner above the fold", "Safari", "cancelled")
         ]
         model.items[1]["native"]["project"] = .string("Desktop app")
         model.items[3]["native"]["project"] = .string("Inbox")
         model.items[3]["summary"] = .string("Increased the search field width and kept the clear button visible.")
-        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":2},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌥⌘A"},"localServer":{"running":true,"busy":false}}"#.utf8))
+        model.state = try! JSON.decode(Data(#"{"health":{"tone":"ok","title":"Connected"},"serverURL":"http://127.0.0.1:29703/annotations","annotating":false,"permissions":{"accessibility":true,"screenRecording":true},"queue":{"todo":2,"inProgress":1,"done":3},"pending":{"count":0},"failedCount":0,"hotkey":{"display":"⌥⌘A"},"localServer":{"running":true,"busy":false}}"#.utf8))
         model.selected = "demo-215"
         #endif
     }
@@ -87,7 +88,7 @@ import ScreenCaptureKit
             scrollToBottom(window.contentView)
             await shot(window, "\(appearance)-29-project-detail-bottom", directory)
             model.navigate("project:website", id: "demo-215")
-            precondition(model.filtered.count == 3 && model.selectedProjectID == "website")
+            precondition(model.filtered.count == 4 && model.selectedProjectID == "website")
             await shot(window, "\(appearance)-30-project-annotations", directory)
             window.setContentSize(Kit.windowMinSize)
             await shot(window, "\(appearance)-38-filtered-minimum", directory)
@@ -117,7 +118,7 @@ import ScreenCaptureKit
             await shot(editor, "\(appearance)-27-project-editor-bottom", directory); editor.close()
             let menu = demoWindow(MenuPanel(model: model), size: NSSize(width: 360, height: 560))
             await shot(menu, "\(appearance)-11-menu", directory)
-            model.items += (203...210).map { item($0, "Older note \($0) for the scrolled flyout", "Safari", "done") }
+            model.items += (202...209).map { item($0, "Older note \($0) for the scrolled flyout", "Safari", "done") }
             await shot(menu, "\(appearance)-11b-menu-long", directory)
             scrollToBottom(menu.contentView)
             await shot(menu, "\(appearance)-11c-menu-scrolled", directory)
