@@ -60,8 +60,9 @@ try {
     const server = await start(["--store", store]);
     const { url } = server;
 
-    // Rebinding needs a name an attacker controls. Addresses, loopback names and this machine's
-    // name are safe on any port, so agents in a VM, a container or behind a port forward connect.
+    // Rebinding needs a name an attacker can point here. An address and "localhost" are safe on
+    // any port, so agents in a VM, a container or behind a port forward connect. Every other
+    // name is refused, also this machine's own: a hostile network can answer for it.
     const port = new URL(url).port;
     for (const host of [
         `127.0.0.1:${port}`,
@@ -69,12 +70,19 @@ try {
         "192.168.64.1:8080",
         "10.44.0.6",
         "[fd00::1]:9000",
-        "app.localhost",
-        "host.docker.internal:29703",
-        hostname(),
+        "LOCALHOST:29703",
     ])
         assert.equal(await raw(url, "GET", "/health", { Host: host }), 200, host);
-    for (const host of ["evil.example", `rebind.example:${port}`, "localhost.evil.example"])
+    for (const host of [
+        "evil.example",
+        `rebind.example:${port}`,
+        "localhost.evil.example",
+        "app.localhost",
+        "localhost.",
+        "host.docker.internal",
+        hostname(),
+        hostname().replace(/\.local$/, ""),
+    ])
         assert.equal(await raw(url, "GET", "/health", { Host: host }), 403, host);
     const named = await start(["--allow-host", "Tunnel.Example", "--store", join(dir, "named")]);
     assert.equal(await raw(named.url, "GET", "/health", { Host: "tunnel.example:443" }), 200);
@@ -87,7 +95,6 @@ try {
         "https://localhost",
         "http://127.0.0.1:8000",
         "http://[::1]:3000",
-        "http://app.localhost:8080",
     ]) {
         const response = await fetch(url, {
             method: "OPTIONS",
@@ -100,6 +107,8 @@ try {
     }
     for (const origin of [
         "https://evil.example",
+        "http://app.localhost:8080",
+        `http://${hostname()}:5173`,
         "http://localhost.evil.example",
         "https://127.0.0.1.evil.example",
         "null",

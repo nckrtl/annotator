@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, watch } from "node:fs";
 import { AnnotationStore, normalizeStatus, validId } from "./store.mjs";
 import { clearState, start, status, stop as stopServer, writeState } from "./lifecycle.mjs";
-import { hostname, networkInterfaces, tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
@@ -19,8 +19,8 @@ serve runs in the foreground. Default: 127.0.0.1, a random port and a new tempor
 --host without an IP binds to 0.0.0.0, so other machines can reach the server.
 --allow-origin ORIGIN allows a page on another machine or domain; repeat for each origin.
 Pages on localhost are always allowed.
---allow-host NAME accepts requests addressed to another name for this machine,
-such as a tunnel or reverse proxy name; repeat for each name.
+--allow-host NAME accepts requests addressed to this machine by name, such as its
+host name or a reverse proxy name; repeat for each name. IP addresses always work.
 --state writes the server's PID, port and URL to FILE while it runs.
 start runs serve in the background; stop and status use the same state file.
 start, stop and status print JSON.`;
@@ -152,17 +152,10 @@ try {
                 }, 25);
             }),
         );
-        // DNS rebinding needs a name that an attacker controls. An IP address, a loopback name
-        // and this machine's own name cannot be one. Any other name needs --allow-host.
+        // DNS rebinding needs a name that an attacker can point at this machine. An IP address
+        // and "localhost" cannot be one. Every other name can, also this machine's own name on
+        // a hostile network, so it needs --allow-host.
         // The port is not checked, so port forwards and tunnels keep working.
-        const machine = hostname().toLowerCase();
-        const ownNames = new Set([
-            "localhost",
-            "host.docker.internal",
-            machine,
-            machine.replace(/\.local$/, ""),
-            `${machine.replace(/\.local$/, "")}.local`,
-        ]);
         const trustedHost = (authority) => {
             let name;
             try {
@@ -172,8 +165,7 @@ try {
             }
             return (
                 isIP(name.replace(/^\[|\]$/g, "")) !== 0 ||
-                name.endsWith(".localhost") ||
-                ownNames.has(name) ||
+                name === "localhost" ||
                 allowedHosts.has(name)
             );
         };
@@ -183,8 +175,7 @@ try {
                 const { protocol, hostname } = new URL(origin);
                 return (
                     ["http:", "https:"].includes(protocol) &&
-                    (["localhost", "127.0.0.1", "[::1]"].includes(hostname) ||
-                        hostname.endsWith(".localhost"))
+                    ["localhost", "127.0.0.1", "[::1]"].includes(hostname)
                 );
             } catch {
                 return false;

@@ -37,8 +37,6 @@ let transport: AnnotationTransport | undefined;
 let generation = 0;
 let discoverUrl = "";
 let eventsUrl = "";
-/** The server removes one site's annotations on request. An older server would clear everything. */
-let removesBySite = false;
 export type ServiceOptions = {
     /** Local annotation server endpoint. */
     serverUrl?: string;
@@ -149,7 +147,6 @@ export function configureAnnotationService(
         /* Optional storage. */
     }
     eventsUrl = "";
-    removesBySite = false;
     serviceConnection.setState(serviceUrl || transport ? "Connecting" : "Host integration");
     generation++;
     revisions.clear();
@@ -196,6 +193,15 @@ export function parseAnnotation(value: unknown): Annotation | null {
         status:
             item.status === "todo" ? "pending" : item.status === "done" ? "resolved" : item.status,
     } as Annotation;
+}
+/** `endpoint` with a path segment and query values added. Keeps a query the endpoint has. */
+function endpointUrl(endpoint: string, segment = "", query: Record<string, string> = {}): string {
+    const mark = endpoint.indexOf("?");
+    const path = mark < 0 ? endpoint : endpoint.slice(0, mark);
+    const values = new URLSearchParams(mark < 0 ? "" : endpoint.slice(mark + 1));
+    for (const [key, value] of Object.entries(query)) values.set(key, value);
+    const search = values.toString();
+    return `${path}${segment ? `/${encodeURIComponent(segment)}` : ""}${search ? `?${search}` : ""}`;
 }
 function siteOf(url: string): string | undefined {
     try {
@@ -366,21 +372,17 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
     } else if (serviceUrl) {
         try {
             // Screenshots stay on the server; the pins do not need them.
-            const result = (await request(
-                `${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}screenshots=0`,
-            )) as {
+            const result = (await request(endpointUrl(serviceUrl, "", { screenshots: "0" }))) as {
                 annotations?: unknown[];
                 data?: unknown[];
                 meta?: {
                     eventsUrl?: string;
                     lastNumber?: number;
                     deletedIds?: string[];
-                    removesBySite?: boolean;
                 };
             };
             if (current !== generation) return summary([]);
             serviceConnection.setState("Connected");
-            removesBySite = result.meta?.removesBySite === true;
             rememberNumber(result.meta?.lastNumber);
             if (result.meta?.eventsUrl) {
                 const endpoint = new URL(serviceUrl, window.location.href);
@@ -485,27 +487,28 @@ async function removeLocalAnnotations(scope: RemovalScope): Promise<boolean> {
     removalError.setState("");
     if (settings.mode !== "server" || !serviceUrl) return true;
     const endpoint = serviceUrl;
-    const target = id
-        ? `${endpoint}/${encodeURIComponent(id)}`
-        : pathname !== undefined
-          ? `${endpoint}?pathname=${encodeURIComponent(pathname)}`
-          : origin !== undefined
-            ? `${endpoint}?origin=${encodeURIComponent(origin)}`
-            : endpoint;
     const remove = async (url: string) => {
         const response = await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(10000) });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
     };
     try {
         await mutateLocal(endpoint, async () => {
-            if (id || origin === undefined || pathname !== undefined || removesBySite)
-                return remove(target);
-            // An older server would clear the whole store: remove this site's records one by one.
-            const list = (await request(endpoint)) as { annotations?: unknown[]; data?: unknown[] };
+            if (id) return remove(endpointUrl(endpoint, id));
+            if (pathname !== undefined) return remove(endpointUrl(endpoint, "", { pathname }));
+            if (origin === undefined) return remove(endpoint);
+            // An older server ignores "origin" and clears the whole store. So ask the server
+            // first, right before the request, and remove one by one when it cannot do this.
+            const list = (await request(endpointUrl(endpoint, "", { screenshots: "0" }))) as {
+                annotations?: unknown[];
+                data?: unknown[];
+                meta?: { removesBySite?: boolean };
+            };
+            if (list.meta?.removesBySite === true)
+                return remove(endpointUrl(endpoint, "", { origin }));
             for (const value of list.annotations ?? list.data ?? []) {
                 const record = parseAnnotation(value);
                 if (record?.url && siteOf(record.url) === origin)
-                    await remove(`${endpoint}/${encodeURIComponent(record.id)}`);
+                    await remove(endpointUrl(endpoint, record.id));
             }
         });
         return true;

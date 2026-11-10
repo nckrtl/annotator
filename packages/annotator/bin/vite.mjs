@@ -17,6 +17,8 @@ export function annotationServerProxy() {
             ];
         },
         configureServer(server) {
+            /** Ports of older annotation servers, and until when that answer is trusted. */
+            const older = new Map();
             server.middlewares.use(async (req, res, next) => {
                 const url = new URL(req.url ?? "/", "http://localhost");
                 const match = url.pathname.match(
@@ -51,12 +53,18 @@ export function annotationServerProxy() {
                     const body = await check.json();
                     let known = check.ok && body.service === "@nckrtl/annotator";
                     if (!known && check.ok && body.ok === true) {
-                        // An older server names itself only in its list.
-                        const list = await fetch(`http://127.0.0.1:${port}/annotations`, {
-                            signal: AbortSignal.timeout(3000),
-                        });
-                        known =
-                            list.ok && (await list.json()).meta?.service === "@nckrtl/annotator";
+                        // An older server names itself only in its list. That list is large,
+                        // so remember the answer for a minute.
+                        known = older.get(port) > Date.now();
+                        if (!known) {
+                            const list = await fetch(`http://127.0.0.1:${port}/annotations`, {
+                                signal: AbortSignal.timeout(3000),
+                            });
+                            known =
+                                list.ok &&
+                                (await list.json()).meta?.service === "@nckrtl/annotator";
+                            if (known) older.set(port, Date.now() + 60_000);
+                        }
                     }
                     if (!known)
                         return json(502, {

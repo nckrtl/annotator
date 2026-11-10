@@ -567,7 +567,7 @@ try {
             completeSubmission = resolve;
         });
         await page.route("https://annotation.test/**", async (route) => {
-            if (route.request().url().endsWith("/submit")) {
+            if (new URL(route.request().url()).pathname === "/submit") {
                 if (route.request().method() === "POST") {
                     await submission;
                     await route.fulfill({
