@@ -24,7 +24,8 @@ import Observation
         self.changed = changed; self.selected = selected
         recording = true; changed(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) ?? event }
+            let passes = MainActor.assumeIsolated { self.map { $0.handle(event) != nil } ?? true }
+            return passes ? event : nil
         }
         inactive = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
