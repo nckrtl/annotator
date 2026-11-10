@@ -111,6 +111,53 @@ import Testing
     try await voice.finish()
     #expect(voice.error == nil)
 }
+@MainActor @Test func earlierFailureDoesNotBlockSubmitOfUnchangedText() async throws {
+    for failure in ["notRunning", "unauthorized", "failed", "operatorCancelled"] {
+        let voice = Dictation(); var calls: [String] = []
+        voice.text = { "Fix the button alignment" }
+        voice.sleep = { _ in try await Task.sleep(for: .milliseconds(5)) }
+        voice.call = { action in
+            calls.append(action)
+            if failure == "operatorCancelled" {
+                return .object(["result": .string("ok"), "status": .string("ready"), "cancelledAt": .number(Date().timeIntervalSince1970 * 1000)])
+            }
+            return .object(["result": .string(action == "start" ? failure : "ok")])
+        }
+        voice.start()
+        try await waitUntil { voice.phase == "idle" && voice.error != nil }
+        try await voice.finish()
+        try await voice.finish()
+        #expect(voice.error == nil)
+        #expect(voice.text() == "Fix the button alignment")
+        #expect(!calls.contains("stop"))
+    }
+}
+@MainActor @Test func cancelledSubmitStillThrowsAfterAnEarlierFailure() async throws {
+    let voice = Dictation()
+    voice.text = { "Typed" }
+    voice.call = { action in .object(["result": .string(action == "start" ? "notRunning" : "ok")]) }
+    voice.start()
+    try await waitUntil { voice.error != nil }
+    let finish = Task { withUnsafeCurrentTask { $0?.cancel() }; try await voice.finish() }
+    do { try await finish.value; Issue.record("A cancelled Submit went through") } catch { #expect(error is CancellationError) }
+}
+@MainActor @Test func failureDuringThisFinishBlocksSubmitOfUnchangedText() async throws {
+    let voice = Dictation(); var stops = 0
+    voice.text = { "Typed before dictation" }
+    voice.sleep = { duration in
+        if duration == .milliseconds(150) { try await Task.sleep(for: .seconds(10)) }
+        else { await Task.yield() }
+    }
+    voice.call = { action in
+        if action == "stop" { stops += 1 }
+        return .object(["result": .string(action == "stop" ? "notRunning" : "ok"), "status": .string("recording")])
+    }
+    voice.start()
+    try await waitUntil { voice.phase == "recording" }
+    do { try await voice.finish(); Issue.record("A failed stop submitted") } catch { #expect(error.localizedDescription.contains("not running")) }
+    #expect(stops == 1)
+    #expect(voice.error != nil)
+}
 @MainActor @Test func lostPasteDoesNotSubmit() async {
     let voice = Dictation(); voice.text = { "Unchanged" }
     voice.call = { _ in .object(["result": .string("ok")]) }
@@ -284,4 +331,12 @@ import Testing
     #expect(voice.phase == "idle")
     #expect(releases.contains("start-failed"))
     bridge.stop()
+}
+
+@Test func cancelledAnnotationsAreFinished() {
+    let items: [JSON] = ["todo", "in_progress", "done", "cancelled"].enumerated().map { .object(["number": .number(Double($0.offset)), "status": .string($0.element)]) }
+    #expect(items.filter(AnnotationCollection.isOpen).map { $0["status"].string } == ["todo", "in_progress"])
+    #expect(AnnotationCollection.items(items, page: "done", projects: [], search: "").map { $0["status"].string } == ["cancelled", "done"])
+    #expect(AnnotationCollection.items(items, page: "open", projects: [], search: "").map { $0["status"].string } == ["in_progress", "todo"])
+    #expect(AnnotationCollection.statusTitle("cancelled") == "Cancelled")
 }
