@@ -1,4 +1,18 @@
-import type { AnnotationRect } from "./types";
+import type { Annotation, AnnotationRect } from "./types";
+
+/** Move a recorded viewport box to the current viewport. Older records carry only vertical scroll. */
+export function annotationViewportBox(
+    annotation: Annotation,
+    scroll: { x: number; y: number },
+): AnnotationRect | undefined {
+    const box = annotation.boundingBox;
+    if (!box || annotation.isFixed) return box;
+    const recorded = annotation.scrollOffset ?? {
+        x: 0,
+        y: Number.parseFloat(annotation.scrollPosition ?? "0") || 0,
+    };
+    return { ...box, x: box.x + recorded.x - scroll.x, y: box.y + recorded.y - scroll.y };
+}
 
 export const SCREENSHOT_BLEED = 100;
 export const SCREENSHOT_ASPECT = 16 / 9;

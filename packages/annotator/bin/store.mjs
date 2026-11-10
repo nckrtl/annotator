@@ -56,6 +56,8 @@ export class AnnotationStore {
         writeFileSync(descriptor, String(process.pid));
         closeSync(descriptor);
         this.ownsLock = true;
+        this.unreadableIds = new Set();
+        this.fileErrors = new Map();
         try {
             this.deletedFile = join(path, ".deleted.json");
             const deleted = existsSync(this.deletedFile)
@@ -134,6 +136,7 @@ export class AnnotationStore {
         this.recoverTransition();
         const result = [];
         const ids = new Set();
+        this.unreadableIds.clear();
         for (const folder of ["todo", "in-progress", "done"]) {
             for (const name of readdirSync(join(this.path, folder))) {
                 if (!name.endsWith(".json")) continue;
@@ -142,16 +145,32 @@ export class AnnotationStore {
                     unlinkSync(file);
                     continue;
                 }
-                const annotation = JSON.parse(readFileSync(file, "utf8"));
-                if (
-                    !validId(annotation?.id) ||
-                    name !== `${annotation.id}.json` ||
-                    typeof annotation.comment !== "string" ||
-                    !Number.isSafeInteger(annotation.revision)
-                )
-                    throw new Error(`Invalid annotation file: ${file}`);
-                if (ids.has(annotation.id))
-                    throw new Error(`Duplicate annotation: ${annotation.id}`);
+                let annotation;
+                try {
+                    annotation = JSON.parse(readFileSync(file, "utf8"));
+                    if (
+                        !validId(annotation?.id) ||
+                        name !== `${annotation.id}.json` ||
+                        typeof annotation.comment !== "string" ||
+                        !Number.isSafeInteger(annotation.revision)
+                    )
+                        throw new Error("Invalid annotation record");
+                    if (ids.has(annotation.id)) throw new Error("Duplicate annotation record");
+                    this.fileErrors.delete(file);
+                } catch (error) {
+                    // Preserve bad files for repair. A temporary parse failure is not
+                    // a deletion and must never become a permanent tombstone.
+                    this.unreadableIds.add(name.slice(0, -5));
+                    const reason =
+                        error instanceof SyntaxError
+                            ? "Invalid JSON"
+                            : (error.code ?? error.message);
+                    if (this.fileErrors.get(file) !== reason) {
+                        console.error(`Could not read annotation file ${file}: ${reason}`);
+                        this.fileErrors.set(file, reason);
+                    }
+                    continue;
+                }
                 ids.add(annotation.id);
                 // External directory moves still determine status; server transitions
                 // recover their full payload from the journal before scanning.
@@ -240,6 +259,10 @@ export class AnnotationStore {
         const records = this.list();
         const existing = records.find((a) => a.id === body.id);
         if (existing) return { annotation: existing, created: false };
+        if (this.unreadableIds.has(body.id))
+            throw new Error(
+                `Repair the unreadable annotation file for ${body.id} before reusing its id.`,
+            );
         const annotation = {
             ...body,
             number: this.nextNumber(),

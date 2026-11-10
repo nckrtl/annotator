@@ -202,7 +202,12 @@ try {
         "/annotations",
     );
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
-    local = spawn(process.execPath, ["bin/serve.mjs", "serve"]);
+    local = spawn(process.execPath, [
+        "bin/serve.mjs",
+        "serve",
+        "--allow-origin",
+        new URL(page.url()).origin,
+    ]);
     const localUrl = await new Promise((resolve, reject) => {
         let output = "";
         const timeout = setTimeout(() => reject(new Error("Local server startup timed out")), 5000);
