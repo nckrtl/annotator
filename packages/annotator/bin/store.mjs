@@ -11,6 +11,7 @@ import {
     statSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { mayBeServer } from "./lifecycle.mjs";
 
 export const validId = (id) =>
     typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(id);
@@ -24,6 +25,30 @@ const states = {
 };
 const folderFor = (status) =>
     status === "todo" ? "todo" : status === "in_progress" ? "in-progress" : "done";
+/** Fields the server sets. A client cannot send them. */
+const serverFields = [
+    "number",
+    "status",
+    "createdAt",
+    "revision",
+    "syncError",
+    "delivery",
+    "claimedAt",
+    "completedAt",
+    "summary",
+    "question",
+];
+const clientFields = (body) =>
+    Object.fromEntries(Object.entries(body).filter(([key]) => !serverFields.includes(key)));
+/** The site of a record. Desktop apps and other addresses without one never match. */
+const originOf = (url) => {
+    try {
+        const { origin } = new URL(url);
+        return origin === "null" ? undefined : origin;
+    } catch {
+        return undefined;
+    }
+};
 export const normalizeStatus = (status) =>
     Object.hasOwn(states, status) ? states[status] : undefined;
 
@@ -44,12 +69,17 @@ export class AnnotationStore {
             const pid = Number(readFileSync(this.lock, "utf8"));
             if (!Number.isSafeInteger(pid) || pid <= 0)
                 throw new Error(`Invalid store lock: ${this.lock}`);
+            let running = true;
             try {
                 process.kill(pid, 0);
-                throw new Error("This annotation store is already served by another process.");
             } catch (error) {
-                if (error.code !== "ESRCH") throw error;
+                // EPERM: the process exists and belongs to another user.
+                if (error.code === "ESRCH") running = false;
+                else if (error.code !== "EPERM") throw error;
             }
+            // After a crash another program can get the old server's PID.
+            if (running && mayBeServer(pid))
+                throw new Error("This annotation store is already served by another process.");
             unlinkSync(this.lock);
         }
         const descriptor = openSync(this.lock, "wx", 0o600);
@@ -236,11 +266,12 @@ export class AnnotationStore {
         renameSync(`${this.deletedFile}.tmp`, this.deletedFile);
         this.deletedIds = deleted;
     }
-    remove(id, pathname) {
+    remove(id, pathname, origin) {
         const removed = this.list().filter(
             (annotation) =>
                 (id === undefined || annotation.id === id) &&
-                (pathname === undefined || annotation.pathname === pathname),
+                (pathname === undefined || annotation.pathname === pathname) &&
+                (origin === undefined || originOf(annotation.url) === origin),
         );
         this.rememberDeleted(removed.map((annotation) => annotation.id));
         for (const annotation of removed)
@@ -258,20 +289,31 @@ export class AnnotationStore {
     create(body) {
         const records = this.list();
         const existing = records.find((a) => a.id === body.id);
-        if (existing) return { annotation: existing, created: false };
+        if (existing) {
+            // The same comment is a retry. A new comment is an edit, while the work is still open.
+            if (existing.comment === body.comment) return { annotation: existing, created: false };
+            if (existing.status !== "todo")
+                return { annotation: existing, created: false, locked: true };
+            const annotation = {
+                ...existing,
+                ...clientFields(body),
+                revision: Math.max(0, ...records.map((a) => a.revision)) + 1,
+            };
+            this.write(annotation);
+            return { annotation, created: false, edited: true };
+        }
         if (this.unreadableIds.has(body.id))
             throw new Error(
                 `Repair the unreadable annotation file for ${body.id} before reusing its id.`,
             );
         const annotation = {
-            ...body,
+            ...clientFields(body),
             number: this.nextNumber(),
             status: "todo",
             createdAt: Date.now(),
             revision: Math.max(0, ...records.map((a) => a.revision)) + 1,
             syncError: null,
         };
-        delete annotation.delivery;
         this.write(annotation);
         return { annotation, created: true };
     }

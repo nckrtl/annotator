@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -35,13 +35,35 @@ function alive(pid) {
     }
 }
 
+/**
+ * False only when the PID surely belongs to another program. After a crash or a power loss the
+ * system can give a server's old PID to something else; that must not block the store forever.
+ */
+export function mayBeServer(pid) {
+    if (process.platform === "win32") return true;
+    try {
+        const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+            encoding: "utf8",
+            timeout: 2000,
+            stdio: ["ignore", "pipe", "ignore"],
+        });
+        return /node|bun|deno|annotator/i.test(command);
+    } catch {
+        return true;
+    }
+}
+
 async function responds(url) {
+    const service = async (target, read) => {
+        const response = await fetch(target, { signal: AbortSignal.timeout(2000) });
+        return response.ok && read(await response.json()) === SERVICE;
+    };
     try {
         const health = new URL(url);
         health.pathname = health.pathname.replace(/\/annotations\/?$/, "/health");
-        const response = await fetch(health, { signal: AbortSignal.timeout(2000) });
-        const body = await response.json();
-        return response.ok && body?.service === SERVICE;
+        if (await service(health, (body) => body?.service)) return true;
+        // An older server names itself only in its list.
+        return await service(url, (body) => body?.meta?.service);
     } catch {
         return false;
     }
@@ -50,10 +72,10 @@ async function responds(url) {
 /** Report the server in the state file. A dead server's state file is removed. */
 export async function status(file) {
     const state = readState(file);
-    if (state && alive(state.pid) && (await responds(state.url)))
-        return { running: true, ...state };
-    if (state && !alive(state.pid)) rmSync(file, { force: true });
-    return state && alive(state.pid)
+    const live = state && alive(state.pid) && mayBeServer(state.pid);
+    if (live && (await responds(state.url))) return { running: true, ...state };
+    if (state && !live) rmSync(file, { force: true });
+    return live
         ? { running: false, pid: state.pid, error: "The annotation server does not respond." }
         : { running: false };
 }
@@ -87,7 +109,7 @@ export async function start(file, serveArgs, script) {
 /** Stop the server in the state file with SIGTERM, so it closes its store cleanly. */
 export async function stop(file) {
     const state = readState(file);
-    if (!state || !alive(state.pid)) {
+    if (!state || !alive(state.pid) || !mayBeServer(state.pid)) {
         rmSync(file, { force: true });
         return { running: false, stopped: false };
     }

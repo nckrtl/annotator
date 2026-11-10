@@ -47,8 +47,8 @@ try {
     const file = join(dir, "store");
     const first = await start(["--host", "127.0.0.1", "--store", file]);
     const second = await start(["--store", join(dir, "second")]);
-    // Reject all cross-origin reads and writes by default, including private-network preflights.
-    for (const path of ["/annotations", "/annotations/events", "/health", "/inject.js", "/skill"]) {
+    // Reject reads and writes from another domain by default, including private-network preflights.
+    for (const path of ["/annotations", "/annotations/events", "/health", "/skill"]) {
         for (const method of ["GET", "POST", "DELETE", "OPTIONS"]) {
             const response = await fetch(new URL(path, first.url), {
                 method,
@@ -267,9 +267,11 @@ try {
     const event = await reader.read();
     assert.match(new TextDecoder().decode(event.value), /data:/);
     streamAbort.abort();
-    const duplicate = await (await post(first.url, { id: "one", comment: "duplicate" })).json();
+    // A retry returns the record as it is now. An edit of claimed work is refused.
+    const duplicate = await (await post(first.url, { id: "one", comment: "Change button" })).json();
     assert.equal(duplicate.data.status, "in_progress");
     assert.equal(duplicate.data.number, 1);
+    assert.equal((await post(first.url, { id: "one", comment: "duplicate" })).status, 409);
     await waitForLog(first, "#1 in progress: Change button");
     assert.equal((await post(`${first.url}/one/status`, { status: "wrong" })).status, 422);
     assert.equal((await post(`${first.url}/missing/status`, { status: "resolved" })).status, 404);
