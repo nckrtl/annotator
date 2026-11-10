@@ -35,6 +35,8 @@ export function useDictation(options: Options) {
         onSubmit: () => void;
         enabled: boolean;
         disposed: boolean;
+        /** A desktop dictation started here and nothing has reached the field since. */
+        desktopPending: boolean;
     }>({
         stop: null,
         abort: null,
@@ -46,6 +48,7 @@ export function useDictation(options: Options) {
         onSubmit: options.onSubmit,
         enabled,
         disposed: false,
+        desktopPending: false,
     });
 
     session.current.comment = options.comment;
@@ -85,6 +88,7 @@ export function useDictation(options: Options) {
         session.current.abort?.abort();
         session.current.stop = null;
         session.current.abort = null;
+        session.current.desktopPending = false;
         session.current.state = "idle";
         setState("idle");
     };
@@ -115,6 +119,7 @@ export function useDictation(options: Options) {
                 );
                 releaseCapture();
                 await request;
+                session.current.desktopPending = true;
             } catch (cause) {
                 if (!session.current.disposed) {
                     setError(
@@ -213,6 +218,13 @@ export function useDictation(options: Options) {
 
     const onEscape = (): boolean => false;
 
+    /** The desktop app may still record: a click on the next element has to stop it. */
+    const desktopPending = (): boolean => session.current.desktopPending;
+    /** Text reached the field, typed or pasted, so the desktop dictation is over. */
+    const noteInput = (): void => {
+        session.current.desktopPending = false;
+    };
+
     useEffect(() => {
         session.current.disposed = false;
         setDictationKeyHandlers({
@@ -249,5 +261,7 @@ export function useDictation(options: Options) {
         toggle,
         onEnter,
         onEscape,
+        desktopPending,
+        noteInput,
     };
 }

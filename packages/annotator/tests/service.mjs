@@ -265,6 +265,17 @@ try {
     assert.equal(list.data[0].threadId, undefined, "Server mode skips the transport");
     assert.deepEqual(list.data[0].metadata, { session: "s-1" }, "Metadata reaches the server");
     assert.notEqual(annotation.comment, "Local only", "Local submissions bypass the transport");
+    // An edit of a saved pin reaches the server and stays on the pin.
+    const edited = page.waitForResponse(
+        (response) => response.url() === localUrl && response.request().method() === "POST",
+    );
+    await page.locator("textarea").fill("Local edited");
+    await page.locator("[data-annotation-submit]").click();
+    assert.equal((await edited).status(), 200);
+    assert.equal((await (await fetch(localUrl)).json()).data[0].comment, "Local edited");
+    await page.waitForTimeout(600);
+    await page.getByRole("button", { name: "Edit annotation 1", exact: true }).click();
+    assert.equal(await page.locator("textarea").inputValue(), "Local edited");
     const status = async (value) =>
         fetch(`${localUrl}/${list.data[0].id}/status`, {
             method: "POST",
@@ -293,7 +304,7 @@ try {
     await claimedPin.waitFor({ timeout: 5000 });
     assert.equal(
         await claimedPin.getAttribute("title"),
-        "In progress: Local only",
+        "In progress: Local edited",
         "Live claim clears the question without reloading",
     );
     assert.equal(await questionPin.count(), 0);

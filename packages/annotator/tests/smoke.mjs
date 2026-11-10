@@ -299,7 +299,18 @@ try {
     }
     // The host provider hands start and stop to window.__ANNOTATOR_HOST__. A strict
     // connect-src blocks page requests to the desktop app, so the page must not make one.
-    for (const scenario of ["paste", "start-false", "start-reject", "stop-false", "no-host"]) {
+    // "typed", "empty" and "pasted": no dictation waits for a paste, so a click on the next
+    // element must not ask the host to stop.
+    for (const scenario of [
+        "paste",
+        "start-false",
+        "start-reject",
+        "stop-false",
+        "no-host",
+        "typed",
+        "empty",
+        "pasted",
+    ]) {
         const page = await browser.newPage();
         const outside = [];
         page.on("request", (request) => {
@@ -329,7 +340,7 @@ try {
                 await route.fulfill({
                     contentType: "text/html; charset=utf-8",
                     headers: { "Content-Security-Policy": "connect-src 'self'" },
-                    body: '<h1>First target</h1><button id="next" style="position:absolute;left:600px;top:200px">Next target</button><script>window.__AGENT_ANNOTATION__ = {dictation:{provider:"host"}};</script><script src="/inject.js"></script>',
+                    body: `<h1>First target</h1><button id="next" style="position:absolute;left:600px;top:200px">Next target</button><script>window.__AGENT_ANNOTATION__ = {dictation:{provider:"host"${["typed", "empty"].includes(scenario) ? ",autoStart:false" : ""}}};</script><script src="/inject.js"></script>`,
                 });
             }
         });
@@ -339,7 +350,44 @@ try {
         const field = page.locator("[data-annotation-field]");
         await field.waitFor();
         const calls = () => page.evaluate(() => window.hostCalls.map((call) => call.action));
-        if (scenario === "no-host") {
+        const saved = (comment) =>
+            page.waitForFunction((comment) => {
+                const value = JSON.parse(localStorage.getItem("toolbar-annotations-/") ?? "[]");
+                return value.some((item) => item.comment === comment);
+            }, comment);
+        if (scenario === "typed") {
+            // Typed by hand: the click saves and moves at once.
+            await field.click();
+            await page.keyboard.type("Typed comment");
+            await page.locator("#next").click();
+            await saved("Typed comment");
+            await page.waitForFunction(
+                () =>
+                    document
+                        .querySelector("#laravel-toolbar-annotation-host")
+                        .shadowRoot.querySelector("textarea")?.value === "",
+            );
+            assert.equal(await page.getByRole("alert").count(), 0);
+            assert.deepEqual(await calls(), []);
+        } else if (scenario === "empty") {
+            // Nothing to save and nothing to stop: the popup stays and shakes.
+            await page.locator("#next").click();
+            await page.waitForTimeout(400);
+            assert.equal(await field.count(), 1);
+            assert.equal(await page.getByRole("alert").count(), 0);
+            assert.equal(await page.locator("[data-annotation-marker]").count(), 0);
+            assert.deepEqual(await calls(), []);
+        } else if (scenario === "pasted") {
+            // The desktop app already pasted, for example after its own stop key.
+            await page.getByRole("button", { name: "Dictate comment", exact: true }).waitFor();
+            await field.click();
+            await page.keyboard.insertText("Already pasted");
+            await page.locator("#next").click();
+            await saved("Already pasted");
+            await page.waitForFunction(() => window.hostCalls.length === 2);
+            assert.equal(await page.getByRole("alert").count(), 0);
+            assert.deepEqual(await calls(), ["start", "start"], "no stop for a finished dictation");
+        } else if (scenario === "no-host") {
             await page.waitForTimeout(150);
             assert.equal(
                 await page.getByRole("button", { name: "Dictate comment", exact: true }).count(),
@@ -455,6 +503,22 @@ try {
         await page.addScriptTag({ url: "https://annotation.test/inject.js" });
         const enter = page.getByRole("button", { name: "Enter annotation mode", exact: true });
         await enter.waitFor();
+        if (control !== "button") {
+            // Outside annotation mode the clear key is left to the browser.
+            const prevented = await page.evaluate((meta) => {
+                const event = new KeyboardEvent("keydown", {
+                    key: "R",
+                    shiftKey: true,
+                    metaKey: meta,
+                    ctrlKey: !meta,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                document.body.dispatchEvent(event);
+                return event.defaultPrevented;
+            }, control === "Meta");
+            assert.equal(prevented, false);
+        }
         if (control === "button") await enter.click();
         else await page.keyboard.press(`${control}+Shift+A`);
         await page.getByRole("button", { name: "Exit annotation mode", exact: true }).waitFor();

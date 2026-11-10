@@ -3,9 +3,12 @@ import { triggerDictation } from "./dictation-trigger";
 import { recordDictationTiming } from "./post-dictation";
 import type { AnnotationDraft } from "./types";
 
-let handler: ((next: AnnotationDraft) => void) | null = null;
+/** Returns false when the click moves nothing, so the caller can shake the popup. */
+type MoveHandler = (next: AnnotationDraft) => boolean;
 
-export function onOutsideAnnotationClick(callback: (next: AnnotationDraft) => void): () => void {
+let handler: MoveHandler | null = null;
+
+export function onOutsideAnnotationClick(callback: MoveHandler): () => void {
     handler = callback;
     return () => {
         if (handler === callback) handler = null;
@@ -13,9 +16,7 @@ export function onOutsideAnnotationClick(callback: (next: AnnotationDraft) => vo
 }
 
 export function requestAnnotationMove(next: AnnotationDraft): boolean {
-    if (!handler) return false;
-    handler(next);
-    return true;
+    return handler ? handler(next) : false;
 }
 
 /** Listen before stopping so a paste arriving before the stop response is retained. */

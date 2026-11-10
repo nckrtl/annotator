@@ -524,10 +524,13 @@ function resetPagePins(): void {
     annotations.value = [];
 }
 
-/** Local server mode removes stored work; transports only dismiss browser pins. */
+/**
+ * Local server mode removes the stored work of this site; transports only dismiss browser pins.
+ * A store can hold other sites and apps, so the removal names this site's origin.
+ */
 export function clearAllAnnotations(): void {
     annotationGeneration += 1;
-    void clearSyncedAnnotations().then((removed) => {
+    void clearSyncedAnnotations({ origin: window.location.origin }).then((removed) => {
         if (!removed) return;
         resetPagePins();
         clearStoredAnnotations();
@@ -538,7 +541,7 @@ export function clearAllAnnotations(): void {
 export function clearPageAnnotations(): void {
     const pathname = currentPathname || window.location.pathname;
     annotationGeneration += 1;
-    void clearSyncedAnnotations(pathname).then((removed) => {
+    void clearSyncedAnnotations({ pathname }).then((removed) => {
         if (!removed) return;
         dismissAnnotations(loadAnnotations(pathname).map((annotation) => annotation.id));
         saveAnnotations([], pathname);
@@ -760,6 +763,8 @@ export function handleKeyDown(event: KeyboardEvent): void {
         !event.altKey &&
         (shortcut === "a" || shortcut === "r")
     ) {
+        // Outside annotation mode this key stays the browser's hard reload.
+        if (shortcut === "r" && !annotationMode.value) return;
         event.preventDefault();
         event.stopImmediatePropagation();
         if (!event.repeat) {

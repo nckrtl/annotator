@@ -194,6 +194,14 @@ export function parseAnnotation(value: unknown): Annotation | null {
             item.status === "todo" ? "pending" : item.status === "done" ? "resolved" : item.status,
     } as Annotation;
 }
+function isOtherSite(url: string | undefined): boolean {
+    if (!url) return false;
+    try {
+        return new URL(url, window.location.href).origin !== window.location.origin;
+    } catch {
+        return false;
+    }
+}
 function receive(value: unknown): Annotation | null {
     const annotation = parseAnnotation(value);
     if (annotation) rememberNumber(annotation.number);
@@ -204,6 +212,8 @@ function receive(value: unknown): Annotation | null {
     )
         return null;
     revisions.set(annotation.id, annotation.revision);
+    // A shared server also holds other sites and desktop apps. Do not cache their records.
+    if (isOtherSite(annotation.url)) return annotation;
     // Update all paths, including pages not currently mounted, before advancing the event cursor.
     const path = annotation.pathname || window.location.pathname;
     const existing = loadAnnotations(path).filter((a) => a.id !== annotation.id);
@@ -349,7 +359,8 @@ export async function fetchAnnotationSync(): Promise<AnnotationSync> {
         }
     } else if (serviceUrl) {
         try {
-            const result = (await request(serviceUrl)) as {
+            // Screenshots stay on the server; the pins do not need them.
+            const result = (await request(`${serviceUrl}?screenshots=0`)) as {
                 annotations?: unknown[];
                 data?: unknown[];
                 meta?: { eventsUrl?: string; lastNumber?: number; deletedIds?: string[] };
@@ -425,8 +436,9 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
         }
         // Poll only when no event would tell us about a change, and never from a hidden tab.
         const hidden = () => document.visibilityState === "hidden";
+        const streaming = () => stream?.readyState === EventSource.OPEN;
         const timer = setInterval(() => {
-            if (!hidden() && !connection?.live()) void refresh();
+            if (!hidden() && !connection?.live() && !streaming()) void refresh();
         }, 15000);
         const onVisible = () => {
             if (!hidden() && !connection?.live()) void refresh();
@@ -448,8 +460,9 @@ export function subscribeAnnotationEvents(handlers: AnnotationEventHandlers): ()
         stop();
     };
 }
-async function removeLocalAnnotations(scope: { id?: string; pathname?: string }): Promise<boolean> {
-    const { id, pathname } = scope;
+type RemovalScope = { id?: string; pathname?: string; origin?: string };
+async function removeLocalAnnotations(scope: RemovalScope): Promise<boolean> {
+    const { id, pathname, origin } = scope;
     removalError.setState("");
     if (settings.mode !== "server" || !serviceUrl) return true;
     const endpoint = serviceUrl;
@@ -457,7 +470,9 @@ async function removeLocalAnnotations(scope: { id?: string; pathname?: string })
         ? `${endpoint}/${encodeURIComponent(id)}`
         : pathname !== undefined
           ? `${endpoint}?pathname=${encodeURIComponent(pathname)}`
-          : endpoint;
+          : origin !== undefined
+            ? `${endpoint}?origin=${encodeURIComponent(origin)}`
+            : endpoint;
     try {
         await mutateLocal(endpoint, async () => {
             const response = await fetch(target, {
@@ -478,8 +493,11 @@ async function removeLocalAnnotations(scope: { id?: string; pathname?: string })
         return false;
     }
 }
-export function clearSyncedAnnotations(pathname?: string): Promise<boolean> {
-    return removeLocalAnnotations({ pathname });
+/** Remove the annotations of one page or one site from the local server. */
+export function clearSyncedAnnotations(
+    scope: { pathname?: string; origin?: string } = {},
+): Promise<boolean> {
+    return removeLocalAnnotations(scope);
 }
 export async function deleteSyncedAnnotation(id: string): Promise<boolean> {
     if (!(await removeLocalAnnotations({ id }))) return false;
