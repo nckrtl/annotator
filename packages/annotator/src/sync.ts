@@ -154,7 +154,8 @@ export function configureAnnotationService(
 }
 /** Use the same transport for connection checks and annotation writes. */
 export function resolveAnnotationServerUrl(value: string): string {
-    const url = value.trim().replace(/\/$/, "");
+    // A fragment never reaches the server, and it would swallow what is added to the URL.
+    const url = value.trim().replace(/#.*$/, "").replace(/\/$/, "");
     if (!url) throw new Error("Enter an annotation server URL.");
     const target = new URL(url, window.location.href);
     if (!["http:", "https:"].includes(target.protocol))

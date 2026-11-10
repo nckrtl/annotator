@@ -52,11 +52,14 @@ export function annotationServerProxy() {
                     });
                     const body = await check.json();
                     let known = check.ok && body.service === "@nckrtl/annotator";
+                    // Whatever answers here now is not the older server seen before.
+                    if (!check.ok || body.ok !== true) older.delete(port);
                     if (!known && check.ok && body.ok === true) {
                         // An older server names itself only in its list. That list is large,
                         // so remember the answer for a minute.
                         known = older.get(port) > Date.now();
                         if (!known) {
+                            older.delete(port);
                             const list = await fetch(`http://127.0.0.1:${port}/annotations`, {
                                 signal: AbortSignal.timeout(3000),
                             });
@@ -110,6 +113,7 @@ export function annotationServerProxy() {
                     res.on("close", () => upstream.destroy());
                     req.pipe(upstream);
                 } catch {
+                    older.delete(port);
                     json(502, {
                         error: `Annotation server on port ${port} is unavailable on the development machine.`,
                     });
