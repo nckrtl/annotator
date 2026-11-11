@@ -81,7 +81,7 @@ import AnnotatorCore
                 throw BridgeError("A start failure did not keep an editable draft")
             }
             field.insertText(" Typed after.", replacementRange: NSRange(location: NSNotFound, length: 0))
-            guard model.comment.hasSuffix("Typed after.") else { throw BridgeError("Typing did not reach the draft") }
+            guard model.comment == "Spoken Typed after. Fixture transcript." else { throw BridgeError("Typing did not reach the draft at the caret") }
             fake.startResult = "ok"
             // Escape cancels only this box's session and closes the panel.
             try await dictate()
