@@ -141,7 +141,7 @@ import Observation
     }
     /// The transcript as inserted at the caret: one space first when the character before the
     /// caret is not whitespace. `previous` is nil at the start of the field.
-    public static func spaced(_ text: String, after previous: Character?) -> String {
+    nonisolated public static func spaced(_ text: String, after previous: Character?) -> String {
         guard let previous, !previous.isWhitespace else { return text }
         return " " + text
     }
