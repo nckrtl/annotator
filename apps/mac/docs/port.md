@@ -165,13 +165,15 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
   register Esc; menu bar icon shows annotating.
 - `selected` → release the overlay with `backdrop`, give the record an id if it has none,
   remember it, keep Escape registered, open the activating comment panel next to `frame`.
-  Submit, Escape and a click on the backdrop remove it.
+  Submit and Escape remove the backdrop. A click on it picks the next element (see the move below).
 - Submit → hide the panel, unregister Escape, fill project; then fill the comment (after the
   session's transcript, if one was handed off), save to the retry store and POST. Start a new
   selection with the hotkey or menu.
 - Escape → close the panel immediately, cancel dictation, end selection.
-- The old `resume`/`selectAt`/`clickWhileFrozen` protocol remains for compatibility;
-  normal comments no longer use it or keep a full-screen click target.
+- Move (Nick, 2026-11-11): a click on the frozen backdrop sends `clickWhileFrozen`. The view
+  hands its text and live session to the core, the core finishes them in the background and
+  sends `selectAt`, and the next comment opens and starts its own session. The backdrop
+  keeps the first frozen screen. A click with no open comment removes the backdrop.
 - Queue: SSE + polling (`QueueMonitor.swift`); retry pending when reachable.
 - Menu bar: `pencil.tip.crop.circle`, with its filled variant during selection,
   and the open count. Identity and signing remain unchanged.

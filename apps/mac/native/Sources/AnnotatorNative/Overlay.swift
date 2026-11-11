@@ -183,7 +183,8 @@ final class OverlayController {
             let point = cursor
             Task { await selectElement(at: point) }
         case .frozen:
-            if passive { hide(reason: "backdrop-click") } else { onClickWhileFrozen?(cursor) }
+            // A click beside the comment picks the next element; the core hands the open comment off first.
+            onClickWhileFrozen?(cursor)
         }
     }
 

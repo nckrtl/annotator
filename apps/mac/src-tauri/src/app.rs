@@ -662,6 +662,11 @@ pub fn cancel_comment(app: &crate::runtime::AppHandle) {
 /// Like the web annotator: a click elsewhere hands the open comment off and opens a new one at the
 /// click. The view answers with its text and live session; it never waits for the transcript.
 fn move_comment(app: &crate::runtime::AppHandle, x: f64, y: f64) {
+    // A frozen screen with no comment must never hold the display: the click removes it.
+    if with(app, |core| core.comment.is_none() && !core.annotating) {
+        let _ = helper::send(app, &json!({"action": "annotate", "on": false}));
+        return;
+    }
     let start = with(app, |core| {
         // A view that never answers does not block clicks forever.
         let busy = core.moving.is_some_and(|(at, _, _)| at.elapsed() < Duration::from_secs(10));
