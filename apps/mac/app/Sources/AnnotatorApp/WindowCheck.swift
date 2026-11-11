@@ -38,8 +38,8 @@ import AnnotatorCore
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory + "/\(appearance)-comment-offscreen.png"))
                 }
-                precondition(!panel.styleMask.contains(.nonactivatingPanel), "Dictation needs an activating panel")
-                // Operator can reopen its paste target; that must not navigate to the library.
+                precondition(!panel.styleMask.contains(.nonactivatingPanel), "Typing needs an activating panel")
+                // A reopen while the comment shows must not navigate to the library.
                 let delegate = AppDelegate()
                 precondition(!delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
                 precondition(!library.isVisible)
@@ -50,8 +50,9 @@ import AnnotatorCore
                 panels.focusComment()
                 try await settle()
                 precondition(!library.isVisible && panel.isVisible)
-                try await panels.prepareDictation()
-                guard let field = panel.firstResponder as? NSTextView else { throw BridgeError("No comment editor") }
+                // The panel focuses its field when it shows, so typing works at once.
+                for _ in 0..<20 where !(panel.firstResponder is NSTextView && panel.isKeyWindow) { try await Task.sleep(for: .milliseconds(50)) }
+                guard let field = panel.firstResponder as? NSTextView, panel.isKeyWindow else { throw BridgeError("No focused comment editor") }
                 field.insertText("Typed fixture", replacementRange: NSRange(location: NSNotFound, length: 0))
                 precondition(model.comment == "Typed fixture", "Typing must still reach the draft")
                 lines.append("PASS: \(appearance) frontmost Annotator, key comment editor and typing.")

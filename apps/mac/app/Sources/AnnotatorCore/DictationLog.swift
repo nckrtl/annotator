@@ -1,6 +1,6 @@
 import Foundation
 
-/// Only step/reason codes and numeric focus diagnostics belong here. Never log tokens, response bodies, or comment text.
+/// Only step and reason codes belong here. Never log tokens, session ids, transcripts or comment text.
 public enum DictationLog {
     private static let queue = DispatchQueue(label: "com.nckrtl.annotator.dictation-log")
     public static func write(_ step: String) {

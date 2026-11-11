@@ -126,6 +126,9 @@ impl Settings {
 
     /// Operator carries the Local API token, so its URL must be on this machine.
     pub fn operator(&self) -> Option<url::Url> {
+        // Debug builds let the core smoke test use a fake Operator, still on this machine.
+        #[cfg(debug_assertions)]
+        if let Ok(url) = std::env::var("ANNOTATOR_OPERATOR_URL") { return service_url::loopback(&url); }
         service_url::loopback(OPERATOR_URL)
     }
 

@@ -18,7 +18,7 @@ Events: `{"event":"state","payload":...}`. Events and replies can interleave;
 request IDs match replies. Commands and camelCase argument names remain stable.
 Malformed arguments and unknown commands return errors. Host requests time out
 after 135 seconds by default. Dictation wraps these requests in independent
-5-second deadlines (18 seconds for stop) and cancels abandoned continuations. EOF stops the core
+deadlines (5 s for start and cancel, 130 s for stop and wait) and cancels abandoned continuations. EOF stops the core
 and the capture helper. Logs go to stderr and the existing log file, never stdout.
 
 UI events, in addition to the state and comment events below:
@@ -29,7 +29,7 @@ UI events, in addition to the state and comment events below:
   invalidates pending placement. `hide-menu` hides the menu-bar window.
 - `register-hotkey {slot,keyCode,modifiers}` and `unregister-hotkey <slot>` are
   handled on the main thread. Slot 1 toggles, slot 2 is Escape during selection and while a comment is open. Escape closes
-  the local panel immediately, then cancels dictation and tells the core to stop.
+  the local panel immediately, then cancels the box's Operator session and tells the core to stop.
 - Host sends `hotkey_pressed {slot}` and `hotkey_error {message}`.
 - Host sends `menu_opened` to refresh permissions and projects.
 - `comment_origin {target,screens,mouse,size}` returns `[x,y]` in AppKit points.
@@ -102,9 +102,9 @@ Persisted state:
 - `state`: the whole `AppState` (below), after every change. Windows also call `get_state` once.
 - `queue`: the full `QueueItem[]` list from the server (detail windows read their item from it).
 - `comment-opened`: `CommentTarget` (to the `comment` window), when the panel opens.
-- `comment-finish`: (to `comment`) a click elsewhere: finish dictation, then call
-  `comment_finish_done { submit: bool, text }`.
-- `comment-cancel`: stop dictation when annotate mode ends.
+- `comment-finish`: (to `comment`) a click elsewhere: hand off at once with
+  `comment_finish_done { text, session? }`. Never wait for a transcript.
+- `comment-cancel`: cancel the box's session when annotate mode ends.
 
 ```ts
 type Tone = "ok" | "warning" | "error";
@@ -125,9 +125,10 @@ type AppState = {
     open: QueueItem[]; finished: QueueItem[] };  // without screenshots; same order as QueueSummary
   pending: { count: number; lastError?: string }; failedCount: number;
   projects: { id: string; name: string; root: string }[]; projectsError?: string;
+  dictationError?: string;                       // a handed-off session lost its transcript; names the target
 };
-type CommentTarget = { label: string; mode: "element" | "window" | "region"; captureError?: string;
-  dictation: null | { url: string; app: string; autoStart: boolean } };
+type CommentTarget = { annotationId: string; label: string; mode: "element" | "window" | "region";
+  captureError?: string; dictation: null | { autoStart: boolean } };
 ```
 
 ### Commands
@@ -138,11 +139,14 @@ Menu: `get_state`, `toggle_annotating`, `server_control {action: "start"|"stop"|
 `retry_now`, `show_failed`, `copy_prompt {scope: "inbox"|"all"|projectId}`,
 `hide_menu`, `quit_app`.
 
-Comment: `submit_comment {text}` (closes the panel at once, posts in the background),
-`cancel_comment`, `comment_finish_done {submit, text}`, `operator {action: "status"|"start"|"stop"|"cancel"}`
-(proxies the live `src-tauri/src/operator.rs`; returns its JSON or an error string).
-`release_overlay` preserves the draft and ends selection. `stop_annotating` also
-closes the comment.
+Comment: `submit_comment {text, session?}` (closes the panel at once; with a session, stops it,
+joins its transcript to the text and posts in the background), `cancel_comment`,
+`comment_finish_done {text, session?}` (the same hand-off for a move, then `selectAt`),
+`operator {action: "start"|"stop"|"wait"|"cancel", session}` (one Operator caller-session call
+through `src-tauri/src/operator.rs`; returns `{result, text?, message?}`, or an error string for
+setup errors such as a missing token), `dismiss_dictation_error`. `stop_annotating` also closes
+the comment. `result` is `ok`, `text`, `conflict`, `unknown`, `unsupported`, `timedOut`,
+`notRunning`, `unauthorized` or `failed`.
 
 Settings: `get_settings`, `save_settings {settings}` (re-registers the hotkey, restarts the queue
 when the URL changed), `hotkey_recording {recording: bool}` (unregister the toggle hotkey while the
@@ -159,11 +163,12 @@ Folder selection uses the host’s `NSOpenPanel`. See AGENTS.md for window decis
 ### Flows (port from `AppController.swift`)
 - Toggle (hotkey, menu): without both permissions open onboarding; else `annotate on`,
   register Esc; menu bar icon shows annotating.
-- `selected` → release the overlay with `backdrop`, remember the record, keep Escape
-  registered, open the activating comment panel next to `frame`. Submit, Escape and a
-  click on the backdrop remove it.
-- Submit → fill comment and project, save to the retry store, POST, hide the panel,
-  unregister Escape. Start a new selection with the hotkey or menu.
+- `selected` → release the overlay with `backdrop`, give the record an id if it has none,
+  remember it, keep Escape registered, open the activating comment panel next to `frame`.
+  Submit, Escape and a click on the backdrop remove it.
+- Submit → hide the panel, unregister Escape, fill project; then fill the comment (after the
+  session's transcript, if one was handed off), save to the retry store and POST. Start a new
+  selection with the hotkey or menu.
 - Escape → close the panel immediately, cancel dictation, end selection.
 - The old `resume`/`selectAt`/`clickWhileFrozen` protocol remains for compatibility;
   normal comments no longer use it or keep a full-screen click target.
@@ -180,12 +185,15 @@ Projects and the menu provide server controls, retries, failed files and agent
 prompts. Annotator starts no agent sessions: users paste a copied prompt into any agent. The editor preserves project order because routing uses the
 first match. Saved locations stay the same. Dictation setting keys migrate as described in AGENTS.md.
 
-The comment owns one `Dictation` session. Start/stop/cancel stay serialized in
-Rust; Swift also waits for an old cancellation before starting a new recording.
-A session generation rejects late responses. Submit waits for start, then stop,
-then a changed and settled text field. A missing paste or silence keeps the
-comment open with an editable field and no blocking overlay. Operator cancellation closes it. Return submits, Shift-Return inserts
-a line, and marked text keeps input-method composition. Escape cancels.
+Nick, 2026-11-11: each comment box owns one Operator caller session; the paste path is gone.
+
+The comment owns one `Dictation`. Each start uses a new session `<annotation id>-<n>`.
+After a start, one `wait` runs; a 504 sends it again. The stop button sends `stop`.
+The first transcript from either goes into the field at the caret, once. Submit and
+moves call `detach()`, which waits only for a start in flight, and pass the live session
+to the core; the box never cancels a handed-off session. Escape cancels the session
+after its start answered. Errors keep the field editable. Return submits, Shift-Return
+inserts a line, and marked text keeps input-method composition. Escape cancels.
 
 `ANNOTATOR_UI_DEMO=1` works only in debug builds. It uses made-up data and starts
 no core, helper, server or dictation session. Snapshot mode captures the actual

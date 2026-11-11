@@ -100,16 +100,20 @@ they use the same supplied mark. Generic edit icons remain action symbols.
 ## Operator and overlay recovery
 
 Use `scripts/test.sh`, `scripts/smoke-core.py`, and `scripts/check-dictation.sh`.
-The last check launches the real comment panel through LaunchServices with a fake
-API and made-up text. It checks frontmost PID, first responder, missing-paste
-recovery, typing, and Escape. It needs an unlocked VM desktop; loginwindow owning
-focus correctly fails the check before an API start. It does not record audio.
+The last check launches the real comment panel through LaunchServices with fake
+Operator session replies and made-up text. It checks that a transcript lands at
+the caret once, replaces a selection, that a start error keeps the field editable,
+that Escape cancels only its own session, and that Submit hands the live session
+off. It needs an unlocked VM desktop for its frames. It does not record audio.
 
-`scripts/snapshots.sh` includes the Operator Settings section and the missing-paste
-error in light and dark. ScreenCaptureKit cannot capture these windows while the
-VM desktop is locked. Native Operator audio-to-paste verification additionally
-needs its helpers, models, Accessibility permission, and an unlocked desktop.
-`operator-headless` explicitly does not paste, so it cannot verify comment focus.
+`scripts/smoke-core.py` runs the real core against a fake Operator on a free port
+(`ANNOTATOR_OPERATOR_URL`, read only by debug builds). It checks submit and move
+hand-offs, the background transcript, and the lost-dictation notice.
+
+`scripts/snapshots.sh` includes the Operator Settings section, a dictation error in
+the comment and the lost-dictation notice in the menu, in light and dark.
+ScreenCaptureKit cannot capture these windows while the VM desktop is locked. Live
+Operator audio verification needs Operator's models and microphone access.
 
 Selection now ends when a target is picked. Its helper removes all full-screen
 panels before awaiting capture. The comment stays editable after dictation errors.
@@ -123,13 +127,8 @@ the `X-Operator-Token` header.
 
 For layout review while ScreenCaptureKit is unavailable, a debug demo can set
 `ANNOTATOR_UI_OFFSCREEN=1` with `ANNOTATOR_UI_SNAPSHOTS`. This uses AppKit's view
-rasterization and does not verify WindowServer composition, active switch colors,
-focus, or real paste. Label these captures as offscreen renders in any handoff.
-
-`ANNOTATOR_DICTATION_CHECK_UNFOCUSED=1 scripts/check-dictation.sh` is a separate
-fixture mode for a locked or modal desktop. It explicitly skips activation checks
-but still exercises the real text view's typing, paste, error and Escape paths.
-A successful focus run must omit this flag.
+rasterization and does not verify WindowServer composition, active switch colors
+or focus. Label these captures as offscreen renders in any handoff.
 
 ## Glass headers
 

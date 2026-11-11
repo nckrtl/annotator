@@ -1,11 +1,13 @@
 import SwiftUI
 import AppKit
 
-/// System text input keeps paste, dictation and input-method composition native.
+/// System text input keeps paste and input-method composition native. Dictated text arrives
+/// through `Panels.insertIntoComment`, at the caret, like typing.
 struct CommentEditor: NSViewRepresentable {
     @Binding var text: String
     let submit: () -> Void
     let cancel: () -> Void
+    let attach: (NSTextView) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
@@ -15,7 +17,7 @@ struct CommentEditor: NSViewRepresentable {
         field.textContainerInset = NSSize(width: 4, height: 6)
         field.isAutomaticQuoteSubstitutionEnabled = false
         field.delegate = context.coordinator; field.setAccessibilityLabel("Comment")
-        context.coordinator.field = field
+        context.coordinator.field = field; attach(field)
         context.coordinator.observer = NotificationCenter.default.addObserver(forName: .focusComment, object: nil, queue: .main) { [weak field] _ in
             MainActor.assumeIsolated { _ = field?.window?.makeFirstResponder(field) }
         }

@@ -8,6 +8,7 @@ import AnnotatorCore
     var menu: NSWindow?
     var commentPanel: NSPanel?
     var permissionWindow: NSWindow?
+    weak var commentField: NSTextView?
     init(model: AppModel) { self.model = model }
     func permissions() {
         menu?.orderOut(nil)
@@ -42,21 +43,14 @@ import AnnotatorCore
         }
     }
 
-    /// Native Operator captures the workspace PID at start. Key status alone is insufficient.
-    func prepareDictation() async throws {
-        focusComment()
-        for _ in 0..<20 {
-            try Task.checkCancellation()
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
-               NSApp.isActive, let panel = commentPanel, panel.isKeyWindow,
-               let field = panel.firstResponder as? NSTextView, field.isEditable {
-                DictationLog.write("dictation-focus-confirmed pid=\(getpid()) workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        DictationLog.write("dictation-focus-failed pid=\(getpid()) workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1) active=\(NSApp.isActive) key=\(commentPanel?.isKeyWindow ?? false)")
-        throw BridgeError("The comment field could not get focus. Click it and try again, or type your comment.")
+    /// Inserts a transcript at the caret, replacing any selection, as typing would. False without a field.
+    func insertIntoComment(_ text: String) -> Bool {
+        guard let field = commentField else { return false }
+        let range = field.selectedRange(), string = field.string as NSString
+        let previous = range.location > 0 && range.location <= string.length
+            ? string.substring(with: string.rangeOfComposedCharacterSequence(at: range.location - 1)).first : nil
+        field.insertText(Dictation.spaced(text, after: previous), replacementRange: range)
+        return true
     }
 
     func makeComment() -> NSPanel {
@@ -88,7 +82,7 @@ struct CommentView: View {
                 KitToolbarGroup { KitToolbarButton(icon: .close, help: "Cancel comment") { model.cancelComment() }.keyboardShortcut(.cancelAction) }
             }
             if model.target["mode"].string == "window" { Text("Window selection · no accessible element found").font(.kitDetail).foregroundStyle(.secondary) }
-            CommentEditor(text: $model.comment, submit: { Task { await model.submit() } }, cancel: { model.cancelComment() })
+            CommentEditor(text: $model.comment, submit: { Task { await model.submit() } }, cancel: { model.cancelComment() }, attach: { model.panels?.commentField = $0 })
                 .padding(8).background(Color.kitSurface, in: RoundedRectangle(cornerRadius: Kit.Radius.row))
                 .overlay(RoundedRectangle(cornerRadius: Kit.Radius.row).strokeBorder(Color.kitSeparator, lineWidth: 0.5))
                 .accessibilityLabel("Comment")
@@ -99,8 +93,7 @@ struct CommentView: View {
                         if model.dictation == "recording" {
                             // Recording: a red button with a white stop square, like the system recorders.
                             Button {
-                                focused = true
-                                Task { do { try await model.finishDictation() } catch { model.commentError = error.localizedDescription } }
+                                focused = true; model.stopDictation()
                             } label: {
                                 Image(systemName: "stop.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                                     .frame(width: Kit.toolbarGroupHeight, height: Kit.toolbarGroupHeight)
@@ -125,6 +118,18 @@ struct CommentView: View {
             .clipShape(RoundedRectangle(cornerRadius: Kit.windowRadius))
             .overlay(RoundedRectangle(cornerRadius: Kit.windowRadius).strokeBorder(Color.kitSeparator, lineWidth: 0.5))
             .onAppear { focused = true }.onReceive(NotificationCenter.default.publisher(for: .focusComment)) { _ in focused = true }
+    }
+}
+/// A comment that left its box while dictating lost its transcript. The menu and the library show
+/// it until the user dismisses it or the next dictation succeeds.
+struct DictationNotice: View {
+    let model: AppModel
+    var bottom: CGFloat = 0
+    var body: some View {
+        if let message = model.state["dictationError"].string.nilIfEmpty {
+            KitGroup { KitNotice(message, tone: .error) { Button("Dismiss") { model.act("dismiss_dictation_error") }.buttonStyle(.kit) } }
+                .padding(.bottom, bottom)
+        }
     }
 }
 struct PermissionsView: View {
@@ -195,6 +200,7 @@ struct MenuPanel: View {
                         }
                     }.padding(.bottom, Kit.Space.m)
                 }
+                DictationNotice(model: model, bottom: Kit.Space.m)
                 if healthNotice { KitGroup { KitNotice(model.state["health"]["title"].string, tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }.padding(.bottom, Kit.Space.m) }
                 if pending > 0 {
                     KitGroup { KitNotice("\(pending) comments are waiting to send.", tone: .warning) { Button("Retry") { model.act("retry_now") }.buttonStyle(.kit) } }.padding(.bottom, Kit.Space.m)

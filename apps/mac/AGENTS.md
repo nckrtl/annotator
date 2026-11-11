@@ -81,9 +81,8 @@ helper. Read this file before you change it.
    of an element. Use it for canvas apps, games and other UI without
    accessibility data.
 5. **Comment.** On click, remove the full-screen overlay and show a comment panel next
-   to the element. It must be able to become key, because Operator's dictation
-   pastes into the focused field. ⌘↩ submits, Esc cancels. Optional dictation
-   button: see Dictation.
+   to the element. It becomes key, so typing works at once. ⌘↩ submits, Esc
+   cancels. Optional dictation button: see Dictation.
 6. **Capture.** Use ScreenCaptureKit, with `SCScreenshotManager` and an
    `SCContentFilter` for the display. Capture the element frame plus a 24pt
    margin. Exclude the helper's windows from the filter, so the overlay is not
@@ -181,36 +180,72 @@ existing agents already read; keep their meaning. The `native` object is new.
 
 ## Dictation
 
+Nick, 2026-11-11: each comment box owns one Operator caller session; the paste path is gone.
+
 Operator is the only dictation app. Its bundle ID is `com.nckrtl.operator`, its
 Local API is fixed at `http://127.0.0.1:12321`, and its token is in
 `~/Library/Application Support/com.nckrtl.operator/control.json`. Annotator sends
 the token in the `X-Operator-Token` header. Never send that token to another endpoint.
-
-`POST /dictate/start` with `{"paste":true}` starts recording; `/dictate-stop`
-waits for paste dispatch (200), no dictation/focus change (409), or silence (422).
-`POST /dictate/cancel` cancels. `/status` carries `status`, `cancelledAt` (epoch
-milliseconds), and `error`; an HTTP 200 status can still report a worker error.
 The native contract is in `~/apps/operator/mac/app/Core/Sources/OperatorCore/Control`.
 
-At selection, the helper's full-screen panels go, or stay as a passive frozen backdrop that takes no focus and that one click removes.
-The comment uses an activating key panel. Before start and stop, verify that
-Annotator is frontmost and the editable text view is its first responder. Operator
-pins the frontmost PID at recording start. A 200 stop reply does not prove the
-paste reached the comment: wait for changed, settled text for at most three seconds.
+Every call posts `{"session": "<id>"}`. A session id is 1–200 of `A-Za-z0-9_-`, and
+Operator accepts it once. Operator never pastes for a session and never touches the
+clipboard or focus.
 
-Escape closes the comment and ends selection; it never resumes a blocking overlay.
-Annotator retains its global Escape shortcut through the comment. API errors stay
-beside the field, which remains editable. Every dictation exit releases the overlay
-before background cancellation. HTTP limits: status 2 s, start 4 s, cancel 3 s,
-stop 15 s. Swift independently bounds calls at 5 s (stop 18 s), stalled preparation
-or transcription at 20 s, and a recording at 120 s. The helper closes after 15 s
-without input, with a background exit backstop after one more second if its main
-actor cannot run. EOF and parent exit also stop the helper.
+| Request | Answers |
+| --- | --- |
+| `POST /dictate/start` | 202 started, 200 unchanged, 409 busy or already used. 400 or 404: Operator predates sessions. |
+| `POST /dictate/stop` | Stops a recording, then answers when the transcript is final: 200 `{"text"}`, 404 unknown, 409 cancelled, 500 failed, 504 after about 119 s. |
+| `POST /dictate/wait` | Like stop, but never stops the recording. It tells Annotator that Operator's own shortcut ended it. |
+| `POST /dictate/cancel` | Cancels only that session: 202, 200 unchanged, 404. |
+
+A new session ends another session's recording; that one keeps transcribing.
+Operator leaves Escape and Return to Annotator during a session.
+
+The flow, as in Conn's annotation overlay:
+
+1. **Session per box.** When a comment opens, the core gives the record an id if it
+   has none and sends it as `annotationId`. Each start in that box uses the session
+   `<annotation id>-<n>`; `n` counts starts in the box.
+2. **Start.** Auto-start and the mic button start a session. No focus check runs.
+   The panel still focuses its field when it shows, so typing works.
+3. **Stay in the box.** One long `wait` runs per session; a 504 sends it again. The
+   stop button sends `stop` and shows "Transcribing…". The first transcript that
+   arrives goes into the field at the caret, once, replacing any selection, with one
+   space before it when the previous character is not whitespace. At 120 s the box
+   sends `stop` and keeps the text.
+4. **Leave the box.** Return, Submit, or a click on another element while the screen
+   is frozen (`clickWhileFrozen`) never waits for a transcript. The view hands its
+   text and live session to the core. The core takes the record, closes the panel,
+   and finishes in a background task: `stop`, then the typed text and the transcript
+   joined with one space, posted through the submitter. When both are empty it posts
+   nothing and logs that. A move opens the next comment, which starts its own session
+   at once. Several background finishes can run at once.
+5. **Loud background failure.** When a background `stop` fails, the core still posts
+   the typed text, and sets `dictationError` in the state. The menu and the library
+   show it as a notice that names the target and the reason, never the comment text.
+   It clears when the user dismisses it or a later dictation succeeds.
+6. **Cancel.** Escape and the close button cancel the box's session in the background
+   and close the box. A cancel goes out only after its start answered, and it never
+   affects another session. Swift orders this; Rust keeps no queue.
+   Escape also ends selection and never resumes a blocking overlay. Annotator keeps
+   its global Escape shortcut through the comment.
+7. **Errors in the box** stay beside the field, which stays editable: Operator not
+   running, a rejected token, "Operator is busy. Try again." (409 on start), "Operator
+   cancelled dictation. Type your comment or try again." (409 on stop or wait),
+   "Operator lost this dictation. Type your comment or try again." (404), "Operator
+   heard no speech." (empty transcript), and "Update Operator to dictate in
+   Annotator." (400 or 404 on start). There is no paste fallback.
+
+HTTP limits in Rust: start 4 s, cancel 3 s, stop and wait 125 s. Swift bounds start
+and cancel at 5 s, and stop and wait at 130 s. The helper closes after 15 s without
+input, with a background exit backstop after one more second if its main actor
+cannot run. EOF and parent exit also stop the helper.
 
 Settings store the dictation choices as `operatorEnabled` and `operatorAutoStart`.
-There is no app picker or editable API URL. Dictation steps and overlay-release reasons go to `dictation.log` and
-`overlay.log` under Annotator's Application Support folder, with bounded file sizes.
-They contain step codes and focus PIDs, never tokens, response bodies, or comment text.
+There is no app picker or editable API URL. Dictation steps go to `dictation.log`
+under Annotator's Application Support folder, with a bounded size. It holds step
+codes only, never tokens, session ids, transcripts or comment text.
 
 ## Permissions
 
@@ -242,7 +277,7 @@ use another checkout. Do not copy its controls into this repository.
 - Menu: SwiftUI `MenuBarExtra` with window style. Library, Projects and Settings
   provide the full queue, server and prompt controls.
 - Comment: SwiftUI hosted in an activating, key-capable AppKit `NSPanel` and visible over full-screen apps. `NSTextView` preserves input methods,
-  Operator paste, Return to submit, Shift-Return for a line, and Escape to cancel.
+  caret insertion of transcripts, Return to submit, Shift-Return for a line, and Escape to cancel.
 - Permissions: a frosted SwiftUI prompt in an AppKit window.
 - Overlay: keep the existing AppKit panels, hit testing, region selection and
   ScreenCaptureKit capture. Its neutral outline has a contrasting halo, so it
@@ -266,7 +301,7 @@ docs/port.md          # process contracts
 ```
 
 Rust keeps settings, HTTP, SSE/polling, queue, pending/retry storage, routing,
-agent prompts and Operator serialization. It imports neither SwiftUI nor AppKit.
+agent prompts, Operator session calls and background finishes. It imports neither SwiftUI nor AppKit.
 `AnnotatorCore` keeps JSON framing, the pipe client and dictation lifecycle;
 it imports neither SwiftUI nor AppKit. Only the UI target owns windows, Carbon
 shortcuts, focus and file pickers.
@@ -316,10 +351,11 @@ CI checks out the private DesignKit repository using `DESIGN_KIT_DEPLOY_KEY`
 ## Verification
 
 - `scripts/test.sh`: capture geometry and redaction; Rust HTTP/queue/retry,
-  routing, prompts and Operator; Swift pipe framing and dictation races.
+  routing, prompts and Operator sessions; Swift pipe framing and the session lifecycle.
 - `scripts/smoke-core.py`: real Rust core, temporary home and loopback server,
   controlled helper fixture. Tests saved settings, permission and hotkey events,
   capture-to-submit, routing, screenshots, live queue, offline retry, deletion,
+  session hand-offs against a fake Operator, the lost-dictation notice,
   malformed commands and cleanup on EOF. No user data or server is used.
 - `scripts/snapshots.sh [absolute-output-directory]`: debug-only demo data;
   no helpers, servers or user settings. Captures every page, panel, editor,
@@ -327,7 +363,7 @@ CI checks out the private DesignKit repository using `DESIGN_KIT_DEPLOY_KEY`
   current-process API captures the actual windows, including glass and native
   chrome, without a Screen Recording grant.
 - Real capture and dictation still require granted macOS permissions and a
-  running Operator. Check hover/click, Option-drag, Escape, paste-before-submit,
+  running Operator. Check hover/click, Option-drag, Escape, dictate-then-submit,
   multi-display placement and full-screen panels on a signed installation.
 
 Logs: `~/Library/Logs/Annotator/annotator.log`. Past 1 MB it moves to

@@ -125,7 +125,10 @@ import ScreenCaptureKit
             model.items = Array(model.items.prefix(2))
             model.state["health"] = .object(["tone": .string("error"), "title": .string("Server unreachable")])
             model.state["pending"]["count"] = .number(3)
-            await shot(menu, "\(appearance)-26-menu-offline", directory); menu.close()
+            await shot(menu, "\(appearance)-26-menu-offline", directory)
+            model.state["dictationError"] = .string("Lost the dictation for “Safari · Open project”: Operator cancelled it. Annotator sent the typed text.")
+            await shot(menu, "\(appearance)-27-menu-dictation-lost", directory); menu.close()
+            model.state["dictationError"] = .null
             populate(model)
             model.state["permissions"] = .object(["accessibility": .bool(false), "screenRecording": .bool(false)])
             let permissions = demoWindow(PermissionsView(model: model), size: NSSize(width: 460, height: 390))
@@ -140,7 +143,7 @@ import ScreenCaptureKit
             model.demoDictation = "idle"; model.target["mode"] = .string("window"); model.commentError = "Screen capture failed. Check Screen Recording in System Settings. Your comment can still be sent."
             await shot(comment, "\(appearance)-16-capture-error", directory)
             model.target["mode"] = .string("element")
-            model.comment = ""; model.commentError = "Operator sent no text to the comment. Try again or type your comment."
+            model.comment = ""; model.commentError = "Operator heard no speech."
             await shot(comment, "\(appearance)-16b-dictation-error", directory); comment.close()
             model.page = "all"; model.selected = ""; model.items = []; model.state["queue"] = .object(["todo": .number(0), "inProgress": .number(0), "done": .number(0)])
             await shot(window, "\(appearance)-17-empty-library", directory)

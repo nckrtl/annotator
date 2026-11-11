@@ -1,183 +1,148 @@
 import Foundation
 import Observation
 
-/// A comment owns one recording. Every exit releases the overlay before any network cleanup.
+/// One comment box's Operator dictation. Each recording is a new caller session named
+/// `<annotation id>-<n>`, because Operator accepts a session id once. Operator never pastes for a
+/// session: stop and wait answer with the transcript, which the box inserts at the caret once.
 @MainActor @Observable public final class Dictation {
+    /// `idle`, `starting`, `recording` or `transcribing`.
     public private(set) var phase = "idle"
     public private(set) var error: String?
-    @ObservationIgnored public var call: (String) async throws -> JSON = { _ in .null }
-    @ObservationIgnored public var text: () -> String = { "" }
-    @ObservationIgnored public var focus: () async throws -> Void = {}
-    @ObservationIgnored public var releaseOverlay: (String) -> Void = { _ in }
-    @ObservationIgnored public var reportError: (String) -> Void = { _ in }
+    /// The box's live session, from start until its transcript arrives, a cancel or a hand-off.
+    public private(set) var session: String?
+    @ObservationIgnored public var call: (_ action: String, _ session: String) async throws -> JSON = { _, _ in .null }
+    @ObservationIgnored public var insert: (String) -> Void = { _ in }
+    @ObservationIgnored public var succeeded: () -> Void = {}
     @ObservationIgnored public var sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
-    // Injectable deadlines keep failure tests fast. Production limits are independent of polling.
+    // Injectable deadlines keep failure tests fast.
     @ObservationIgnored public var replyTimeout: Duration = .seconds(5)
-    @ObservationIgnored public var stopTimeout: Duration = .seconds(18)
-    @ObservationIgnored public var progressTimeout: Duration = .seconds(20)
+    @ObservationIgnored public var transcriptTimeout: Duration = .seconds(130)
     @ObservationIgnored public var recordingLimit: Duration = .seconds(120)
-    @ObservationIgnored private var startTask: Task<Void, Never>?
-    @ObservationIgnored private var watchTask: Task<Void, Never>?
-    @ObservationIgnored private var cancellation: Task<Void, Never>?
-    private var generation = 0
-    private var before = ""
-    private var started: Double = 0
+    /// Answers whether the start succeeded. A cancel or a hand-off waits for it.
+    @ObservationIgnored private var startTask: Task<Bool, Never>?
+    @ObservationIgnored private var tasks: [Task<Void, Never>] = []
+    private var annotation = ""
+    private var count = 0
     public init() {}
 
-    private func release(_ reason: String) {
-        DictationLog.write("overlay-release \(reason)")
-        releaseOverlay(reason)
+    /// A new comment box. Its sessions are named after the annotation id.
+    public func open(_ annotation: String) {
+        cancel()
+        self.annotation = annotation; count = 0; error = nil
     }
-    private func request(_ action: String) async throws -> JSON {
-        // Action comes only from this class, never from a server response.
-        if action != "status" { DictationLog.write("dictation-\(action)") }
+    private static let results: Set = ["ok", "text", "conflict", "unknown", "unsupported", "timedOut", "notRunning", "unauthorized", "failed"]
+    private func request(_ action: String, _ session: String) async throws -> JSON {
+        // Action comes only from this class. The log keeps step codes, never text.
+        DictationLog.write("session-\(action)")
         let call = self.call
-        let reply = try await Deadline().run(after: action == "stop" ? stopTimeout : replyTimeout) { try await call(action) }
-        if action != "status" { DictationLog.write("dictation-\(action)-reply") }
+        let reply = try await Deadline().run(after: ["stop", "wait"].contains(action) ? transcriptTimeout : replyTimeout) { try await call(action, session) }
+        DictationLog.write("session-\(action)-\(Self.results.contains(reply["result"].string) ? reply["result"].string : "other")")
         return reply
     }
     public func start() {
-        guard phase == "idle" else { return }
-        generation += 1; let session = generation
-        phase = "starting"; error = nil; before = text()
-        release("dictation-start")
-        let priorCancellation = cancellation
+        guard phase == "idle", session == nil, !annotation.isEmpty else { return }
+        count += 1
+        let session = "\(annotation)-\(count)"
+        self.session = session; phase = "starting"; error = nil
         startTask = Task {
-            await priorCancellation?.value
-            guard session == generation else { return }
-            do {
-                try await focus()
-                guard session == generation else { return }
-                // The previous cancellation may finish while this start waits. Its timestamp
-                // belongs to the old recording, even when the user already opened a new comment.
-                started = Date().timeIntervalSince1970 * 1000
-                try check(try await request("start"))
-                guard session == generation else { return }
-                phase = "recording"
-                watchTask = Task { await watch(session) }
-            } catch { fail(error, session: session, reason: "start-failed") }
+            let reply: JSON
+            do { reply = try await request("start", session) } catch {
+                // No answer: Operator may have started. End only this session.
+                Task { _ = try? await self.request("cancel", session) }
+                fail(error, session); return false
+            }
+            do { try check(reply, "start") } catch { fail(error, session); return false }
+            // A cancel or a hand-off during start now owns the session.
+            guard self.session == session else { return true }
+            phase = "recording"
+            tasks.append(Task { await waitForText(session) })
+            tasks.append(Task {
+                guard (try? await sleep(recordingLimit)) != nil, self.session == session, phase == "recording" else { return }
+                DictationLog.write("session-limit"); stop()
+            })
+            return true
         }
     }
+    /// The stop button and the recording limit. The transcript arrives through stop or wait.
+    public func stop() {
+        guard phase == "recording", let session else { return }
+        phase = "transcribing"
+        tasks.append(Task {
+            do {
+                let reply = try await request("stop", session)
+                // After a 504 the wait keeps running and answers when the transcript is final.
+                if reply["result"].string != "timedOut" { deliver(reply, session) }
+            } catch { if !(error is CancellationError) { fail(error, session) } }
+        })
+    }
+    /// Escape and the close button. Cancels only this box's session, after its start answered.
     public func cancel() {
-        let active = phase != "idle"
-        generation += 1; phase = "idle"; error = nil
-        watchTask?.cancel()
-        release("cancel")
-        guard active else { return }
-        // Start has a short hard deadline. Serialize cleanup before the next recording.
+        guard let session else { return }
+        end(); error = nil
         let start = startTask
-        cancellation = Task {
-            await start?.value
+        Task {
+            guard await start?.value == true else { return }
             do {
-                let reply = try await request("cancel")
-                if reply["result"].string != "noDictation" { try check(reply) }
-            } catch {
-                DictationLog.write("dictation-cancel-failed")
-                reportError("Could not cancel Operator. Check Operator before trying again.")
-            }
+                let reply = try await request("cancel", session)
+                if !["ok", "unknown"].contains(reply["result"].string) { try check(reply, "cancel") }
+            } catch { DictationLog.write("session-cancel-failed") }
         }
     }
-    private func fail(_ failure: Error, session: Int, reason: String) {
-        guard session == generation else { return }
-        cancel()
+    /// Submit or a move: hands the live session to the core, which stops it and posts the comment
+    /// in the background. This box forgets the session and never cancels it. Waits only for a
+    /// start in flight; nil when there is no session or its start failed.
+    public func detach() async -> String? {
+        guard let session else { return nil }
+        end(); error = nil
+        DictationLog.write("session-handoff")
+        return await startTask?.value == true ? session : nil
+    }
+    private func waitForText(_ session: String) async {
+        while self.session == session {
+            do {
+                let reply = try await request("wait", session)
+                // Operator gives up on a wait after about 119 s; the recording goes on.
+                if reply["result"].string == "timedOut" { continue }
+                deliver(reply, session); return
+            } catch { if !(error is CancellationError) { fail(error, session) }; return }
+        }
+    }
+    /// Stop and wait can both answer with the same transcript; only the first one counts.
+    private func deliver(_ reply: JSON, _ session: String) {
+        guard self.session == session else { return }
+        do { try check(reply, "stop") } catch { fail(error, session); return }
+        end()
+        let text = reply["text"].string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { error = "Operator heard no speech."; DictationLog.write("session-empty"); return }
+        insert(text); DictationLog.write("session-inserted"); succeeded()
+    }
+    private func fail(_ failure: Error, _ session: String) {
+        guard self.session == session else { return }
+        end()
         error = failure is CancellationError ? "Dictation cancelled. Type your comment or try again." : failure.localizedDescription
-        release(reason)
     }
-    /// Returns only after a paste has settled; a failed dictation never submits stale text.
-    public func finish() async throws {
-        let session = generation
-        defer { release("finish-exit") }
-        try Task.checkCancellation()
-        // A dictation that already failed and ended keeps its message until now. It must not
-        // block the user's own text. A failure during this finish still blocks it below.
-        if phase == "idle" { error = nil; return }
-        do {
-            try await withTaskCancellationHandler {
-                await startTask?.value
-                try Task.checkCancellation()
-                guard session == generation else { throw CancellationError() }
-                if phase == "recording" {
-                    phase = "transcribing"; watchTask?.cancel()
-                    try await focus()
-                    try check(try await request("stop"))
-                    guard try await waitForPaste(session) else { throw BridgeError("Operator sent no text to the comment. Try again or type your comment.") }
-                    guard session == generation else { throw CancellationError() }
-                    phase = "idle"; error = nil
-                } else if phase == "transcribing" { await watchTask?.value }
-                try Task.checkCancellation()
-                guard session == generation else { throw BridgeError(error ?? "Dictation cancelled.") }
-                if let error, text() == before { throw BridgeError(error) }
-                error = nil
-            } onCancel: {
-                Task { @MainActor in self.fail(CancellationError(), session: session, reason: "task-cancelled") }
-            }
-        } catch {
-            fail(error, session: session, reason: "finish-failed")
-            throw error
-        }
+    private func end() {
+        session = nil; phase = "idle"
+        tasks.forEach { $0.cancel() }; tasks = []
     }
-    private func watch(_ session: Int) async {
-        var lastState = ""
-        var changed = ContinuousClock.now
-        let began = ContinuousClock.now
-        do {
-            while session == generation {
-                try await sleep(.milliseconds(150))
-                guard !Task.isCancelled else { return }
-                let reply = try await request("status")
-                guard session == generation, !Task.isCancelled else { return }
-                if reply["cancelledAt"].double >= started {
-                    generation += 1; phase = "idle"
-                    error = "Operator cancelled dictation. Type your comment or try again."
-                    release("operator-cancelled")
-                    return
-                }
-                try check(reply)
-                let state = reply["status"].string
-                guard ["starting", "idle", "ready", "loading", "arming", "recording", "transcribing"].contains(state) else {
-                    throw BridgeError("Operator sent an unknown status. Try again or type your comment.")
-                }
-                if state != lastState { lastState = state; changed = .now; DictationLog.write("dictation-state-\(state)") }
-                if began.duration(to: .now) > recordingLimit || (state != "recording" && changed.duration(to: .now) > progressTimeout) {
-                    DictationLog.write("dictation-progress-timeout")
-                    throw BridgeError("Operator stopped making progress. Try again or type your comment.")
-                }
-                if ["starting", "loading", "arming", "recording"].contains(state) { continue }
-                phase = "transcribing"
-                if state == "transcribing" { continue }
-                guard try await waitForPaste(session) else { throw BridgeError("Operator finished without text. Try again or type your comment.") }
-                guard session == generation else { return }
-                phase = "idle"; error = nil; release("paste-complete"); return
-            }
-        } catch is CancellationError {
-            // finish() cancels this poller deliberately and owns cleanup from that point.
-            if !Task.isCancelled { fail(CancellationError(), session: session, reason: "status-cancelled") }
-        } catch { fail(error, session: session, reason: "watch-failed") }
-    }
-    private func waitForPaste(_ session: Int) async throws -> Bool {
-        for _ in 0..<60 {
-            try Task.checkCancellation()
-            guard session == generation else { throw CancellationError() }
-            if text() != before {
-                let previous = text(); try await sleep(.milliseconds(250))
-                if text() == previous { return session == generation }
-            }
-            try await sleep(.milliseconds(50))
-        }
-        DictationLog.write("dictation-paste-missing")
-        return false
-    }
-    private func check(_ reply: JSON) throws {
-        let result = reply["result"].string
-        if result == "ok" { return }
+    private func check(_ reply: JSON, _ action: String) throws {
         let message: String
-        switch result {
-        case "silence": message = "Operator heard only silence."
-        case "noDictation": message = "No active dictation, or focus changed."
+        switch reply["result"].string {
+        case "ok", "text": return
+        case "conflict": message = action == "start" ? "Operator is busy. Try again." : "Operator cancelled dictation. Type your comment or try again."
+        case "unknown": message = "Operator lost this dictation. Type your comment or try again."
+        case "unsupported": message = "Update Operator to dictate in Annotator."
+        case "timedOut": message = "Operator did not finish in time. Type your comment or try again."
         case "notRunning": message = "Operator is not running or its Local API is unavailable."
         case "unauthorized": message = "Operator rejected its Local API token. Check Operator Settings."
         default: message = reply["message"].string.isEmpty ? "Operator stopped answering." : reply["message"].string
         }
         throw BridgeError(message)
+    }
+    /// The transcript as inserted at the caret: one space first when the character before the
+    /// caret is not whitespace. `previous` is nil at the start of the field.
+    public static func spaced(_ text: String, after previous: Character?) -> String {
+        guard let previous, !previous.isWhitespace else { return text }
+        return " " + text
     }
 }

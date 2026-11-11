@@ -37,7 +37,7 @@ struct SettingsPage: View {
                         KitRow("Server log") { Button("Open") { model.act("show_server_log") }.buttonStyle(.kit) }
                     }
                 } else {
-                    KitGroup("Operator", footer: "Operator pastes into the focused comment field. Annotator waits for the paste before it submits.") {
+                    KitGroup("Operator", footer: "Each comment box records its own Operator session. Annotator puts the text at the cursor. When you submit or pick the next element while Operator still transcribes, Annotator adds the text and sends the comment when it arrives.") {
                         KitRow("Use Operator dictation") { KitSwitch("Use Operator", isOn: toggle("operatorEnabled")) }
                         KitRow("Start dictation with each comment") { KitSwitch("Start dictation automatically", isOn: toggle("operatorAutoStart")) }
                     }

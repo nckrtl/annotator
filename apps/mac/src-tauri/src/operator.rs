@@ -1,5 +1,6 @@
-//! Operator's local dictation API (native Operator contract). See `~/apps/operator/README.md`.
-//! `start` and `cancel` run one after another, so a late cancel never stops a new recording.
+//! Operator's local dictation API with caller sessions (native contract in
+//! `~/apps/operator/mac/app/Core/Sources/OperatorCore/Control`). Each comment box owns one session
+//! per recording. Operator never pastes for a session: stop and wait answer with the transcript.
 
 use crate::annotations::{error_message, status_text};
 use serde_json::{json, Value};
@@ -7,29 +8,66 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum OperatorResult {
+pub enum Reply {
+    /// Start or cancel succeeded (202, or 200 unchanged).
     Ok,
-    /// 409: no active dictation, or focus changed.
-    NoDictation,
-    /// 422: Operator heard only silence.
-    Silence,
-    Failed(String),
+    /// Stop or wait: the final transcript, possibly empty.
+    Text(String),
+    /// 409. Start: Operator is busy or the session was used. Stop or wait: the session was cancelled.
+    Conflict,
+    /// 404 on stop, wait or cancel: Operator does not know the session.
+    Unknown,
+    /// 400 or 404 on start: Operator predates caller sessions.
+    Unsupported,
+    /// 504 on stop or wait: no transcript within about 119 s.
+    TimedOut,
     NotRunning,
     /// 401: missing or wrong Local API token.
     Unauthorized,
+    Failed(String),
 }
 
-impl OperatorResult {
+impl Reply {
     pub fn name(&self) -> &'static str {
         match self {
-            OperatorResult::Ok => "ok",
-            OperatorResult::NoDictation => "noDictation",
-            OperatorResult::Silence => "silence",
-            OperatorResult::Failed(_) => "failed",
-            OperatorResult::NotRunning => "notRunning",
-            OperatorResult::Unauthorized => "unauthorized",
+            Reply::Ok => "ok",
+            Reply::Text(_) => "text",
+            Reply::Conflict => "conflict",
+            Reply::Unknown => "unknown",
+            Reply::Unsupported => "unsupported",
+            Reply::TimedOut => "timedOut",
+            Reply::NotRunning => "notRunning",
+            Reply::Unauthorized => "unauthorized",
+            Reply::Failed(_) => "failed",
         }
     }
+
+    pub fn json(&self) -> Value {
+        match self {
+            Reply::Text(text) => json!({"result": "text", "text": text}),
+            Reply::Failed(message) => json!({"result": "failed", "message": message}),
+            other => json!({"result": other.name()}),
+        }
+    }
+
+    /// Why a background stop lost the dictation, for the notice. Never contains a transcript.
+    pub fn reason(&self) -> String {
+        match self {
+            Reply::Conflict => "Operator cancelled it".into(),
+            Reply::Unknown => "Operator lost it".into(),
+            Reply::TimedOut => "Operator did not finish in time".into(),
+            Reply::NotRunning => "Operator is not running".into(),
+            Reply::Unauthorized => "Operator rejected Annotator's token".into(),
+            Reply::Unsupported => "Operator does not support caller sessions".into(),
+            Reply::Failed(message) => message.trim_end_matches('.').to_string(),
+            Reply::Ok | Reply::Text(_) => "Operator sent no transcript".into(),
+        }
+    }
+}
+
+/// 1–200 of `A-Za-z0-9_-`, as Operator accepts.
+pub fn valid_session(session: &str) -> bool {
+    (1..=200).contains(&session.len()) && session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Where Operator keeps its Local API token. Its identity is `com.nckrtl.operator`.
@@ -54,187 +92,162 @@ pub struct OperatorClient {
     http: reqwest::Client,
 }
 
-/// One answer: the result, and Operator's state when it answered `/status` with 200.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Answer {
-    pub result: OperatorResult,
-    pub status: Option<String>,
-    pub cancelled_at: Option<f64>,
-}
-
-impl Answer {
-    pub fn json(&self) -> Value {
-        let message = match &self.result {
-            OperatorResult::Failed(detail) => Some(detail.clone()),
-            _ => None,
-        };
-        json!({"result": self.result.name(), "message": message,
-            "status": self.status, "cancelledAt": self.cancelled_at})
-    }
-}
-
 impl OperatorClient {
-    /// Bound every request; the UI has its own independent deadlines.
     pub fn new(base: url::Url, token: String) -> OperatorClient {
         OperatorClient { base, token, http: crate::http::short() }
     }
 
-    fn url(&self, path: &str) -> url::Url {
+    /// `start`, `stop`, `wait` or `cancel` for one session. Start 4 s, cancel 3 s, stop and wait 125 s.
+    pub async fn call(&self, action: &str, session: &str) -> Reply {
+        let limit = match action {
+            "start" => 4,
+            "cancel" => 3,
+            "stop" | "wait" => 125,
+            _ => return Reply::Failed(format!("Unknown Operator action: {action}")),
+        };
+        if !valid_session(session) {
+            return Reply::Failed("Not a dictation session id.".into());
+        }
         let mut url = self.base.clone();
         if let Ok(mut segments) = url.path_segments_mut() {
-            segments.pop_if_empty().extend(path.split('/'));
+            segments.pop_if_empty().extend(["dictate", action]);
         }
-        url
-    }
-
-    async fn send(&self, request: reqwest::RequestBuilder) -> (OperatorResult, Option<Vec<u8>>) {
-        let response = match request.header("X-Operator-Token", &self.token).send().await {
+        let request = self.http.post(url).header("X-Operator-Token", &self.token)
+            .json(&json!({"session": session})).timeout(Duration::from_secs(limit));
+        let response = match request.send().await {
             Ok(response) => response,
-            Err(_) => return (OperatorResult::NotRunning, None),
+            Err(error) if error.is_timeout() => return Reply::Failed("Operator did not answer in time.".into()),
+            Err(_) => return Reply::NotRunning,
         };
         let status = response.status().as_u16();
-        let data = match response.bytes().await {
-            Ok(data) => data.to_vec(),
-            Err(_) => return (OperatorResult::Failed("Operator dropped the response.".into()), None),
-        };
-        let result = match status {
-            200 | 202 => OperatorResult::Ok,
-            409 => OperatorResult::NoDictation,
-            422 => OperatorResult::Silence,
-            401 => OperatorResult::Unauthorized,
-            _ => {
-                let detail = error_message(&data).unwrap_or_else(|| status_text(status));
-                OperatorResult::Failed(format!("{status} {detail}"))
-            }
-        };
-        (result, Some(data).filter(|_| status == 200))
-    }
-
-    /// Ok when Operator answers and accepts the token, with its state: `loading`, `arming`,
-    /// `recording`, `transcribing`, `ready`, or an error.
-    pub async fn status(&self) -> Answer {
-        let (result, data) = self.send(self.http.get(self.url("status")).timeout(Duration::from_secs(2))).await;
-        let state = data.and_then(|d| serde_json::from_slice::<Value>(&d).ok());
-        let result = if result == OperatorResult::Ok {
-            match state.as_ref() {
-                Some(s) if s["error"].as_str().is_some_and(|e| !e.is_empty()) =>
-                    OperatorResult::Failed("Operator could not record or transcribe. Check Operator and try again.".into()),
-                Some(s) if s["status"].as_str().is_some() => result,
-                _ => OperatorResult::Failed("Operator sent an invalid status.".into()),
-            }
-        } else { result };
-        Answer {
-            result,
-            status: state.as_ref().and_then(|s| s["status"].as_str().map(String::from)),
-            cancelled_at: state.as_ref().and_then(|s| s["cancelledAt"].as_f64()),
+        let Ok(data) = response.bytes().await else { return Reply::Failed("Operator dropped the response.".into()) };
+        let starting = action == "start";
+        match status {
+            200 | 202 if matches!(action, "stop" | "wait") => Reply::Text(text(&data)),
+            200 | 202 => Reply::Ok,
+            400 | 404 if starting => Reply::Unsupported,
+            401 => Reply::Unauthorized,
+            404 => Reply::Unknown,
+            409 => Reply::Conflict,
+            504 => Reply::TimedOut,
+            _ => Reply::Failed(format!("{status} {}", error_message(&data).unwrap_or_else(|| status_text(status)))),
         }
     }
-
-    /// Starts recording. Operator pastes into the focused field however the recording ends.
-    pub async fn start(&self) -> OperatorResult {
-        self.send(self.http.post(self.url("dictate/start")).json(&json!({"paste": true})).timeout(Duration::from_secs(4))).await.0
-    }
-
-    /// Stops, transcribes and pastes into the focused field. Returns after the paste.
-    pub async fn stop(&self) -> OperatorResult {
-        self.send(self.http.post(self.url("dictate-stop"))).await.0
-    }
-
-    /// Cancels without requesting transcription or paste.
-    pub async fn cancel(&self) -> OperatorResult {
-        self.send(self.http.post(self.url("dictate/cancel")).timeout(Duration::from_secs(3))).await.0
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Kind {
-    Start,
-    Cancel,
-    Stop,
+/// The `text` of a stop or wait answer; anything else is an empty transcript.
+fn text(data: &[u8]) -> String {
+    serde_json::from_slice::<Value>(data).ok().and_then(|v| v["text"].as_str().map(str::to_owned)).unwrap_or_default()
 }
 
-/// Runs start and cancel one at a time. A cancel waits for a start in flight, is skipped when that
-/// start found no dictation, and is sent once: a second cancel without a start between is a no-op.
-/// A stop waits for the commands before it but does not hold the queue, so a cancel can follow it.
-/// A stop that ended the dictation (ok, no dictation or silence) makes the next cancel a no-op;
-/// after a failed stop, a cancel still goes out to clean up.
-pub struct OperatorQueue {
-    /// A generation that each recorded command raises, and the last recorded command.
-    last: tokio::sync::Mutex<(u64, Option<(Kind, OperatorResult)>)>,
+/// What a background finish posts, and why the dictation was lost, if it was.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finish {
+    pub comment: Option<String>,
+    pub lost: Option<String>,
 }
 
-impl Default for OperatorQueue {
-    fn default() -> Self {
-        OperatorQueue { last: tokio::sync::Mutex::new((0, None)) }
-    }
-}
-
-impl OperatorQueue {
-    pub async fn run(&self, client: &OperatorClient, action: &str) -> Result<Answer, String> {
-        let answer = |result| Answer { result, status: None, cancelled_at: None };
-        match action {
-            "status" => Ok(client.status().await),
-            "start" => {
-                let mut last = self.last.lock().await;
-                let result = client.start().await;
-                last.0 += 1;
-                last.1 = Some((Kind::Start, result.clone()));
-                Ok(answer(result))
-            }
-            "cancel" => {
-                let mut last = self.last.lock().await;
-                match &last.1 {
-                    Some((_, OperatorResult::NoDictation)) | Some((Kind::Stop, _)) => return Ok(answer(OperatorResult::Ok)),
-                    Some((Kind::Cancel, previous)) => return Ok(answer(previous.clone())),
-                    _ => {}
-                }
-                let result = client.cancel().await;
-                last.0 += 1;
-                last.1 = Some((Kind::Cancel, result.clone()));
-                Ok(answer(result))
-            }
-            "stop" => {
-                let generation = self.last.lock().await.0;
-                let result = client.stop().await;
-                // A cancel can run while the stop is in flight. A late stop must not overwrite
-                // a newer start or cancel, and a failed stop must not hide a cleanup cancel.
-                let mut last = self.last.lock().await;
-                if last.0 == generation
-                    && matches!(result, OperatorResult::Ok | OperatorResult::NoDictation | OperatorResult::Silence) {
-                    last.0 += 1;
-                    last.1 = Some((Kind::Stop, result.clone()));
-                }
-                Ok(answer(result))
-            }
-            _ => Err(format!("Unknown Operator action: {action}")),
+/// Joins the typed text and the transcript with one space. A failed stop keeps the typed text.
+pub fn finish(typed: &str, reply: &Reply) -> Finish {
+    let typed = typed.trim();
+    let some = |text: String| Some(text).filter(|t| !t.is_empty());
+    match reply {
+        Reply::Text(transcript) => {
+            let transcript = transcript.trim();
+            let joined = if typed.is_empty() || transcript.is_empty() { format!("{typed}{transcript}") } else { format!("{typed} {transcript}") };
+            Finish { comment: some(joined), lost: None }
         }
+        failed => Finish { comment: some(typed.into()), lost: Some(failed.reason()) },
     }
+}
+
+/// Stops a session that left its comment box and joins its transcript to the typed text. The core
+/// runs it as a background task, so the next comment can start its own session at once.
+pub async fn finish_session(client: Result<OperatorClient, String>, session: &str, typed: &str) -> Finish {
+    let reply = match client {
+        Ok(client) => client.call("stop", session).await,
+        Err(error) => Reply::Failed(error),
+    };
+    crate::log(&format!("Operator stop (background): {}", reply.name()));
+    finish(typed, &reply)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{closed_url, serve, temp_dir, Reply};
-    use std::sync::Arc;
+    use crate::testutil::{closed_url, serve, temp_dir, Reply as Http};
 
     fn client(base: url::Url) -> OperatorClient {
         OperatorClient::new(base, "t".into())
     }
 
     #[tokio::test]
-    async fn status_errors_and_malformed_responses_are_failures() {
-        for body in [r#"{"status":"ready","error":"Speech worker stopped"}"#, "{}", "not json"] {
-            let server = serve(vec![Reply::new(200, body)]);
-            assert!(matches!(client(server.url("")).status().await.result, OperatorResult::Failed(_)));
+    async fn paths_bodies_and_token() {
+        let server = serve(vec![Http::new(202, ""), Http::new(200, r#"{"text":"a"}"#), Http::new(200, r#"{"text":"a"}"#), Http::new(202, "")]);
+        let operator = client(server.url(""));
+        assert_eq!(operator.call("start", "id-1").await, Reply::Ok);
+        assert_eq!(operator.call("wait", "id-1").await, Reply::Text("a".into()));
+        assert_eq!(operator.call("stop", "id-1").await, Reply::Text("a".into()));
+        assert_eq!(operator.call("cancel", "id-1").await, Reply::Ok);
+        assert_eq!(server.paths(), ["/dictate/start", "/dictate/wait", "/dictate/stop", "/dictate/cancel"]);
+        for index in 0..4 {
+            let request = server.request(index);
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.header("x-operator-token"), Some("t"));
+            assert_eq!(serde_json::from_slice::<Value>(&request.body).unwrap(), json!({"session": "id-1"}));
         }
     }
 
     #[tokio::test]
+    async fn rejects_bad_sessions_and_actions_without_a_request() {
+        let server = serve(vec![Http::new(202, "")]);
+        let operator = client(server.url(""));
+        for session in ["", "a b", "a/b", &"x".repeat(201)] {
+            assert!(matches!(operator.call("start", session).await, Reply::Failed(_)));
+        }
+        assert!(matches!(operator.call("status", "a").await, Reply::Failed(_)));
+        assert!(server.paths().is_empty());
+        assert!(valid_session(&"x".repeat(200)) && valid_session("6f1c-AB_1-2"));
+    }
+
+    #[tokio::test]
+    async fn status_codes() {
+        let one = |action: &'static str, status| async move { client(serve(vec![Http::new(status, "")]).url("")).call(action, "s").await };
+        assert_eq!(one("start", 200).await, Reply::Ok);
+        assert_eq!(one("start", 409).await, Reply::Conflict);
+        assert_eq!(one("start", 400).await, Reply::Unsupported);
+        assert_eq!(one("start", 404).await, Reply::Unsupported);
+        assert_eq!(one("cancel", 404).await, Reply::Unknown);
+        for action in ["stop", "wait"] {
+            assert_eq!(one(action, 409).await, Reply::Conflict);
+            assert_eq!(one(action, 404).await, Reply::Unknown);
+            assert_eq!(one(action, 504).await, Reply::TimedOut);
+            assert!(matches!(one(action, 500).await, Reply::Failed(_)));
+            assert!(matches!(one(action, 400).await, Reply::Failed(_)));
+        }
+        assert_eq!(one("stop", 401).await, Reply::Unauthorized);
+        assert_eq!(client(closed_url("")).call("start", "s").await, Reply::NotRunning);
+        let server = serve(vec![Http::new(500, r#"{"error":"Could not start recording"}"#)]);
+        assert_eq!(client(server.url("")).call("start", "s").await, Reply::Failed("500 Could not start recording".into()));
+    }
+
+    #[tokio::test]
+    async fn text_parsing() {
+        for (body, text) in [(r#"{"status":"complete","text":"Fix it"}"#, "Fix it"), (r#"{"text":""}"#, ""),
+            (r#"{"text":3}"#, ""), ("{}", ""), ("not json", "")] {
+            let server = serve(vec![Http::new(200, body)]);
+            assert_eq!(client(server.url("")).call("stop", "s").await, Reply::Text(text.into()));
+        }
+        assert_eq!(Reply::Text("a".into()).json(), json!({"result": "text", "text": "a"}));
+        assert_eq!(Reply::Conflict.json(), json!({"result": "conflict"}));
+    }
+
+    #[tokio::test]
     async fn silent_api_times_out_and_dropped_body_fails() {
-        let server = serve(vec![Reply::new(200, "{}").delayed(2200)]);
+        let server = serve(vec![Http::new(202, "").delayed(4300)]);
         let began = std::time::Instant::now();
-        assert_eq!(client(server.url("")).status().await.result, OperatorResult::NotRunning);
-        assert!(began.elapsed() < Duration::from_secs(3));
+        assert!(matches!(client(server.url("")).call("start", "s").await, Reply::Failed(_)));
+        assert!(began.elapsed() < Duration::from_secs(5));
 
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -244,47 +257,7 @@ mod tests {
             let mut request = [0; 4096]; let _ = stream.read(&mut request);
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 200\r\n\r\n{");
         });
-        assert!(matches!(client(base).stop().await, OperatorResult::Failed(_)));
-    }
-
-    #[tokio::test]
-    async fn status_codes() {
-        let one = |status| async move { client(serve(vec![Reply::new(status, "")]).url("")).stop().await };
-        assert_eq!(one(200).await, OperatorResult::Ok);
-        assert_eq!(one(409).await, OperatorResult::NoDictation);
-        assert_eq!(one(422).await, OperatorResult::Silence);
-        assert!(matches!(one(500).await, OperatorResult::Failed(_)));
-        assert_eq!(one(504).await, OperatorResult::Failed("504 gateway timed out".into()));
-        assert_eq!(client(closed_url("")).start().await, OperatorResult::NotRunning);
-        let server = serve(vec![Reply::new(401, "")]);
-        assert_eq!(client(server.url("")).status().await.result, OperatorResult::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn paths_and_token() {
-        let server = serve(vec![Reply::new(202, "")]);
-        let operator = client(server.url(""));
-        operator.start().await;
-        operator.stop().await;
-        operator.cancel().await;
-        assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel"]);
-        assert_eq!(serde_json::from_slice::<Value>(&server.request(0).body).unwrap(), json!({"paste": true}));
-        for index in 0..3 {
-            let request = server.request(index);
-            assert_eq!(request.method, "POST");
-            assert_eq!(request.header("x-operator-token"), Some("t"));
-        }
-    }
-
-    #[tokio::test]
-    async fn state_and_cancellation() {
-        let server = serve(vec![Reply::new(200, r#"{"status":"ready","cancelledAt":1791400000000}"#)]);
-        let answer = client(server.url("")).status().await;
-        assert_eq!(answer.result, OperatorResult::Ok);
-        assert_eq!(answer.status.as_deref(), Some("ready"));
-        assert_eq!(answer.cancelled_at, Some(1791400000000.0));
-        assert_eq!(server.request(0).header("x-operator-token"), Some("t"));
-        assert_eq!(client(closed_url("")).status().await.status, None);
+        assert!(matches!(client(base).call("stop", "s").await, Reply::Failed(_)));
     }
 
     #[test]
@@ -298,89 +271,45 @@ mod tests {
         assert_eq!(read_token(&file).unwrap(), "abc");
     }
 
-    /// The comment panel closes while a start is in flight: the cancel goes out after the start,
-    /// and only once however often the panel asks.
+    #[test]
+    fn background_finish_joins_typed_text_and_transcript() {
+        let text = |t: &str| Reply::Text(t.into());
+        let post = |c: &str| Finish { comment: Some(c.into()), lost: None };
+        assert_eq!(finish(" Typed ", &text("")), post("Typed"));
+        assert_eq!(finish("", &text(" Spoken ")), post("Spoken"));
+        assert_eq!(finish("Typed", &text("spoken")), post("Typed spoken"));
+        assert_eq!(finish(" ", &text(" ")), Finish { comment: None, lost: None });
+    }
+
+    #[test]
+    fn failed_background_stop_keeps_typed_text_and_says_why() {
+        assert_eq!(finish("Typed", &Reply::Conflict), Finish { comment: Some("Typed".into()), lost: Some("Operator cancelled it".into()) });
+        assert_eq!(finish("", &Reply::NotRunning), Finish { comment: None, lost: Some("Operator is not running".into()) });
+        assert_eq!(finish("", &Reply::Failed("500 Model failed.".into())).lost.as_deref(), Some("500 Model failed"));
+        for reply in [Reply::Unknown, Reply::TimedOut, Reply::Unauthorized] {
+            assert!(finish("x", &reply).lost.is_some());
+        }
+    }
+
+    /// A move hands the old session off and starts the next one at once: the new start is answered
+    /// while the old stop still waits for its transcript.
     #[tokio::test]
-    async fn cancel_waits_for_the_start_and_goes_out_once() {
-        let server = serve(vec![Reply::new(202, "").delayed(300), Reply::new(202, "")]);
+    async fn a_move_does_not_wait_for_the_earlier_session() {
+        let server = serve(vec![Http::new(200, r#"{"text":"first"}"#).delayed(400), Http::new(202, "")]);
         let operator = client(server.url(""));
-        let queue = Arc::new(OperatorQueue::default());
-        let (q, c) = (queue.clone(), operator.clone());
-        let start = tokio::spawn(async move { q.run(&c, "start").await });
+        let began = std::time::Instant::now();
+        let earlier = operator.clone();
+        let first = tokio::spawn(async move { finish_session(Ok(earlier), "a-1", "Typed").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let cancel = queue.run(&operator, "cancel").await.unwrap();
-        assert_eq!(cancel.result, OperatorResult::Ok);
-        assert_eq!(start.await.unwrap().unwrap().result, OperatorResult::Ok);
-        assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
-        assert_eq!(server.paths(), ["/dictate/start", "/dictate/cancel"]);
+        assert_eq!(operator.call("start", "b-1").await, Reply::Ok);
+        assert!(began.elapsed() < Duration::from_millis(300) && !first.is_finished());
+        assert_eq!(first.await.unwrap(), Finish { comment: Some("Typed first".into()), lost: None });
+        assert_eq!(server.paths(), ["/dictate/stop", "/dictate/start"]);
     }
 
     #[tokio::test]
-    async fn no_cancel_after_a_start_without_dictation() {
-        let server = serve(vec![Reply::new(409, "")]);
-        let operator = client(server.url(""));
-        let queue = OperatorQueue::default();
-        assert_eq!(queue.run(&operator, "start").await.unwrap().result, OperatorResult::NoDictation);
-        assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
-        assert_eq!(server.paths(), ["/dictate/start"]);
-    }
-
-    /// A stop that ended the dictation makes the next cancel a no-op, until a new start.
-    #[tokio::test]
-    async fn finished_stop_skips_the_next_cancel() {
-        for status in [200, 409, 422] {
-            let server = serve(vec![Reply::new(202, ""), Reply::new(status, ""), Reply::new(202, "")]);
-            let operator = client(server.url(""));
-            let queue = OperatorQueue::default();
-            queue.run(&operator, "start").await.unwrap();
-            queue.run(&operator, "stop").await.unwrap();
-            assert_eq!(queue.run(&operator, "cancel").await.unwrap().result, OperatorResult::Ok);
-            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop"]);
-            queue.run(&operator, "start").await.unwrap();
-            queue.run(&operator, "cancel").await.unwrap();
-            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/start", "/dictate/cancel"]);
-        }
-    }
-
-    /// After a failed stop, the cancel still goes out to clean up.
-    #[tokio::test]
-    async fn failed_stop_still_sends_cancel() {
-        for status in [500, 401] {
-            let server = serve(vec![Reply::new(202, ""), Reply::new(status, ""), Reply::new(202, "")]);
-            let operator = client(server.url(""));
-            let queue = OperatorQueue::default();
-            queue.run(&operator, "start").await.unwrap();
-            queue.run(&operator, "stop").await.unwrap();
-            queue.run(&operator, "cancel").await.unwrap();
-            assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel"]);
-        }
-        let server = serve(vec![Reply::new(202, "")]);
-        let queue = OperatorQueue::default();
-        queue.run(&client(server.url("")), "start").await.unwrap();
-        assert_eq!(queue.run(&client(closed_url("")), "stop").await.unwrap().result, OperatorResult::NotRunning);
-        queue.run(&client(server.url("")), "cancel").await.unwrap();
-        assert_eq!(server.paths(), ["/dictate/start", "/dictate/cancel"]);
-    }
-
-    /// A cancel goes out while a stop is in flight, and the late stop leaves a newer start's state alone.
-    #[tokio::test]
-    async fn cancel_interrupts_stop_and_late_stop_keeps_new_start() {
-        let server = serve(vec![Reply::new(202, ""), Reply::new(200, "").delayed(300), Reply::new(202, "")]);
-        let operator = client(server.url(""));
-        let queue = Arc::new(OperatorQueue::default());
-        queue.run(&operator, "start").await.unwrap();
-        let (q, c) = (queue.clone(), operator.clone());
-        let stop = tokio::spawn(async move { q.run(&c, "stop").await });
-        for _ in 0..100 {
-            if server.paths().len() >= 2 { break; }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-        assert_eq!(server.paths().len(), 2);
-        queue.run(&operator, "cancel").await.unwrap();
-        queue.run(&operator, "start").await.unwrap();
-        assert!(!stop.is_finished());
-        assert_eq!(stop.await.unwrap().unwrap().result, OperatorResult::Ok);
-        queue.run(&operator, "cancel").await.unwrap();
-        assert_eq!(server.paths(), ["/dictate/start", "/dictate-stop", "/dictate/cancel", "/dictate/start", "/dictate/cancel"]);
+    async fn background_finish_without_a_token_keeps_typed_text() {
+        assert_eq!(finish_session(Err("No token".into()), "a-1", "Typed").await,
+            Finish { comment: Some("Typed".into()), lost: Some("No token".into()) });
     }
 }

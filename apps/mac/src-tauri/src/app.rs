@@ -5,7 +5,7 @@ use crate::annotations::{without_screenshot, AnnotationClient, Item};
 use crate::geometry::Rect;
 use crate::hotkey::{self, Slot};
 use crate::local_server::{self, LocalServer};
-use crate::operator::OperatorQueue;
+use crate::operator::{self, OperatorClient};
 use crate::pending::{PendingStore, Submitter};
 use crate::projects::{ProjectsStore, Routes};
 use crate::queue::{Connection, QueueMonitor};
@@ -36,9 +36,10 @@ pub struct ServerState {
     pub error: Option<String>,
 }
 
-/// The open comment: the record the helper built, waiting for its comment.
+/// The open comment: the record the helper built, waiting for its comment, and the target's label.
 pub struct Comment {
     pub record: Value,
+    pub label: String,
 }
 
 pub struct Core {
@@ -56,6 +57,10 @@ pub struct Core {
     /// The record of the last submitted annotation, to fill in project rules.
     pub last_target: Option<Value>,
     pub helper_error: Option<String>,
+    /// A comment that left its box while dictating lost its transcript. Shown until dismissed or
+    /// until the next dictation succeeds. Names the target, never the comment text. The time lets
+    /// an older session's late success leave a newer failure alone.
+    pub dictation_error: Option<(Instant, String)>,
     /// Open the Screen Recording pane when the next answer still lacks the permission.
     pub screen_pane_pending: bool,
     /// The queue connection last used to decide whether to ask the local server if it runs.
@@ -66,7 +71,6 @@ pub struct Shared {
     pub core: Mutex<Core>,
     pub queue: Arc<QueueMonitor>,
     pub submitter: Arc<Submitter>,
-    pub operator: OperatorQueue,
     pub permission_waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Permissions>>>,
 }
 
@@ -117,12 +121,12 @@ pub fn setup(app: &crate::runtime::AppHandle) {
             moving: None,
             last_target: None,
             helper_error: None,
+            dictation_error: None,
             screen_pane_pending: false,
             server_watch: None,
         }),
         queue,
         submitter,
-        operator: OperatorQueue::default(),
         permission_waiters: Mutex::default(),
     });
 
@@ -199,6 +203,7 @@ pub fn app_state(app: &crate::runtime::AppHandle) -> Value {
         "projects": projects.iter().map(|p| json!({"id": p.id, "name": p.name, "root": p.root})).collect::<Vec<_>>(),
         "projectsError": core.projects.error,
         "helperError": core.helper_error,
+        "dictationError": core.dictation_error.as_ref().map(|(_, message)| message),
     })
 }
 
@@ -516,17 +521,23 @@ pub fn request_permission(app: &crate::runtime::AppHandle, kind: &str) -> Result
 
 fn selected(app: &crate::runtime::AppHandle, event: Value) {
     hotkey::unregister(app, Slot::Escape);
-    let Some(record) = event.get("record").filter(|r| r.is_object()).cloned() else {
+    let Some(mut record) = event.get("record").filter(|r| r.is_object()).cloned() else {
         crate::log("The helper sent a selection without a record.");
         return;
     };
+    // Each comment box names its Operator sessions after the record id.
+    if !record["id"].as_str().is_some_and(crate::annotations::is_valid_id) {
+        record["id"] = json!(uuid::Uuid::new_v4().to_string());
+    }
+    let id = record["id"].clone();
+    let label = event["label"].as_str().unwrap_or_default().to_string();
     let frame: Option<Rect> = serde_json::from_value(event["frame"].clone()).ok();
     let settings = settings(app);
     let opened = with(app, |core| {
         if !core.annotating {
             return false;
         }
-        core.comment = Some(Comment { record });
+        core.comment = Some(Comment { record, label: label.clone() });
         core.moving = None;
         true
     });
@@ -538,7 +549,8 @@ fn selected(app: &crate::runtime::AppHandle, event: Value) {
         "autoStart": settings.operator_auto_start,
     }));
     let target = json!({
-        "label": event["label"].as_str().unwrap_or_default(),
+        "annotationId": id,
+        "label": label,
         "mode": event["mode"].as_str().unwrap_or("element"),
         "bundleId": event["record"]["native"]["app"]["bundleId"].as_str(),
         "captureError": event["captureError"].as_str(),
@@ -566,32 +578,31 @@ fn comment_closed(app: &crate::runtime::AppHandle) {
     emit_state(app);
 }
 
-/// Closes the panel at once and posts in the background. The menu shows the result.
-pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str) -> Result<(), String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("Write a comment first.".into());
-    }
-    let Some(mut record) = with(app, |core| {
+pub fn operator_client(app: &crate::runtime::AppHandle) -> Result<OperatorClient, String> {
+    let base = settings(app).operator().ok_or("The Operator URL in Settings is not valid.")?;
+    let token = operator::read_token(&operator::token_file(crate::settings::OPERATOR, &home()))?;
+    Ok(OperatorClient::new(base, token))
+}
+
+/// Takes the open record with its project. None when it was already taken.
+fn take_comment(app: &crate::runtime::AppHandle) -> Option<(Value, String)> {
+    with(app, |core| {
         let mut comment = core.comment.take()?;
         // Pick up edits made to routes.json by hand.
         core.projects.reload();
-        comment.record["comment"] = json!(text);
         if comment.record["native"].is_object() {
             comment.record["native"]["project"] = json!(core.projects.project_name(&comment.record));
         }
         core.last_target = Some(without_screenshot(&comment.record));
-        Some(comment.record)
-    }) else {
-        return Ok(()); // Already posted.
-    };
-    comment_closed(app);
+        Some((comment.record, comment.label))
+    })
+}
+
+/// Posts the record with its comment in the background. The menu shows the result.
+fn post(app: &crate::runtime::AppHandle, mut record: Value, comment: String) {
+    record["comment"] = json!(comment);
     let id = record["id"].as_str().unwrap_or_default().to_string();
-    if id.is_empty() {
-        record["id"] = json!(uuid::Uuid::new_v4().to_string());
-    }
-    let id = record["id"].as_str().unwrap_or_default().to_string();
-    let body = serde_json::to_vec(&record).map_err(|e| format!("Could not encode the record: {e}"))?;
+    let Ok(body) = serde_json::to_vec(&record) else { return crate::log(&format!("Annotation {id}: could not encode the record")) };
     let app = app.clone();
     crate::runtime::spawn(async move {
         let submitter = shared(&app).submitter.clone();
@@ -599,7 +610,48 @@ pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str) -> Result<(),
         crate::log(&format!("Annotation {id}: {}", result.message()));
         emit_state(&app);
     });
+}
+
+/// The record left its box. Without a session it posts the typed text now. With one, a background
+/// task stops that session, joins its transcript to the typed text and posts the result; several
+/// can run at once. A lost transcript sets a visible error that names the target.
+fn hand_off(app: &crate::runtime::AppHandle, record: Value, label: String, text: &str, session: Option<String>) {
+    let id = record["id"].as_str().unwrap_or_default().to_string();
+    let Some(session) = session else {
+        if text.trim().is_empty() { crate::log(&format!("Annotation {id}: discarded, no comment")) }
+        else { post(app, record, text.trim().to_string()) }
+        return;
+    };
+    let (app, typed, client, began) = (app.clone(), text.to_string(), operator_client(app), Instant::now());
+    crate::runtime::spawn(async move {
+        let finish = operator::finish_session(client, &session, &typed).await;
+        let target = if label.is_empty() { "an annotation".to_string() } else { format!("“{label}”") };
+        with(&app, |core| match &finish.lost {
+            Some(reason) => core.dictation_error = Some((Instant::now(), format!("Lost the dictation for {target}: {reason}. {}",
+                if finish.comment.is_some() { "Annotator sent the typed text." } else { "Nothing was sent." }))),
+            None => if core.dictation_error.as_ref().is_some_and(|(at, _)| *at < began) { core.dictation_error = None },
+        });
+        match finish.comment {
+            Some(comment) => post(&app, record, comment),
+            None => crate::log(&format!("Annotation {id}: discarded, no comment and no transcript")),
+        }
+        emit_state(&app);
+    });
+}
+
+/// Closes the panel at once. `session`: the box's live Operator session, finished in the background.
+pub fn submit_comment(app: &crate::runtime::AppHandle, text: &str, session: Option<String>) -> Result<(), String> {
+    if text.trim().is_empty() && session.is_none() {
+        return Err("Write a comment first.".into());
+    }
+    let Some((record, label)) = take_comment(app) else { return Ok(()) }; // Already posted.
+    comment_closed(app);
+    hand_off(app, record, label, text, session);
     Ok(())
+}
+
+pub fn dismiss_dictation_error(app: &crate::runtime::AppHandle) {
+    if with(app, |core| core.dictation_error.take().is_some()) { emit_state(app); }
 }
 
 pub fn cancel_comment(app: &crate::runtime::AppHandle) {
@@ -607,12 +659,12 @@ pub fn cancel_comment(app: &crate::runtime::AppHandle) {
     panels::hide_comment(app);
 }
 
-/// Like the web annotator: a click elsewhere stops dictation, waits for the paste, submits the
-/// open comment, and opens a new one at the click. The view finishes dictation first.
+/// Like the web annotator: a click elsewhere hands the open comment off and opens a new one at the
+/// click. The view answers with its text and live session; it never waits for the transcript.
 fn move_comment(app: &crate::runtime::AppHandle, x: f64, y: f64) {
     let start = with(app, |core| {
-        // A finish that never answered does not block clicks forever (a stop waits at most 125 s).
-        let busy = core.moving.is_some_and(|(at, _, _)| at.elapsed() < Duration::from_secs(130));
+        // A view that never answers does not block clicks forever.
+        let busy = core.moving.is_some_and(|(at, _, _)| at.elapsed() < Duration::from_secs(10));
         if core.comment.is_none() || busy {
             return false;
         }
@@ -624,23 +676,18 @@ fn move_comment(app: &crate::runtime::AppHandle, x: f64, y: f64) {
     }
 }
 
-/// The view finished dictation. `keep`: it failed, so the panel stays open and says why.
-pub fn comment_finish_done(app: &crate::runtime::AppHandle, submit: bool, text: &str, keep: bool) {
+/// The view handed over its text and live session: finish them in the background and select at
+/// the click, so the next comment starts its own session at once.
+pub fn comment_finish_done(app: &crate::runtime::AppHandle, text: &str, session: Option<String>) {
     let Some((_, x, y)) = with(app, |core| core.moving.take()) else { return };
-    if keep {
-        return;
+    if let Some((record, label)) = take_comment(app) {
+        panels::hide_comment(app);
+        hand_off(app, record, label, text, session);
     }
-    if with(app, |core| core.comment.is_some()) {
-        if submit && !text.trim().is_empty() {
-            let _ = submit_comment(app, text);
-        } else {
-            cancel_comment(app);
-        }
-    }
-    hotkey::unregister(app, Slot::Escape);
-    if with(app, |core| core.annotating) {
-        let _ = helper::send(app, &json!({"action": "selectAt", "x": x, "y": y}));
-    }
+    // The click came from the frozen overlay, so selection goes on there.
+    with(app, |core| core.annotating = true);
+    let _ = helper::send(app, &json!({"action": "selectAt", "x": x, "y": y}));
+    emit_state(app);
 }
 
 // MARK: - Menu

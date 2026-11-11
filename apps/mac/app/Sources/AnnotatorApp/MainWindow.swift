@@ -60,6 +60,7 @@ struct AnnotationList: View {
         ScrollViewReader { proxy in
             KitScrollView {
                 LazyVStack(spacing: 2) {
+                    DictationNotice(model: model)
                     if model.state["health"]["tone"].string != "ok" {
                         KitGroup { KitNotice(model.state["health"]["title"].string.isEmpty ? "Connecting…" : model.state["health"]["title"].string,
                                   tone: model.state["health"]["tone"].string == "error" ? .error : .warning) }

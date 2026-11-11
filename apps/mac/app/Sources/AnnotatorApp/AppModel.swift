@@ -53,14 +53,12 @@ import AnnotatorCore
     var filtered: [JSON] { AnnotationCollection.items(items, page: page, projects: projects, search: search) }
     func start() {
         panels = Panels(model: self); hotkeys = Hotkeys(model: self)
-        voice.call = { [weak self] action in guard let self else { throw CancellationError() }; return try await self.call("operator", ["action": .string(action)]) }
-        voice.text = { [weak self] in self?.comment ?? "" }
-        voice.focus = { [weak self] in
-            guard let panels = self?.panels else { throw CancellationError() }
-            try await panels.prepareDictation()
+        voice.call = { [weak self] action, session in
+            guard let self else { throw CancellationError() }
+            return try await self.call("operator", ["action": .string(action), "session": .string(session)])
         }
-        voice.releaseOverlay = { [weak self] _ in self?.releaseOverlay() }
-        voice.reportError = { [weak self] in self?.commentError = $0 }
+        voice.insert = { [weak self] text in self?.insertTranscript(text) }
+        voice.succeeded = { [weak self] in if self?.state["dictationError"] != .null { self?.act("dismiss_dictation_error") } }
         if demo { Demo.populate(self); return }
         bridge.onEvent = { [weak self] event, value in self?.event(event, value) }
         do {
@@ -136,7 +134,7 @@ import AnnotatorCore
             DictationLog.write("overlay-release core-stopped")
             error = value.string
         case "hide-menu": panels?.menu?.orderOut(nil)
-        case "comment-opened": voice.cancel(); target = value; hideLibraryForAnnotation(); comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
+        case "comment-opened": voice.open(value["annotationId"].string); target = value; hideLibraryForAnnotation(); comment = ""; commentError = value["captureError"] == .null ? nil : value["captureError"].string
         case "show-comment": panels?.showComment(value)
         case "hide-comment": panels?.hideComment()
         case "comment-cancel": cancelDictation(); panels?.hideComment()
@@ -152,24 +150,22 @@ import AnnotatorCore
         }
     }
     func cancelDictation() { voice.cancel() }
-    func releaseOverlay() { act("release_overlay") }
     func cancelComment() {
         cancelDictation(); panels?.hideComment(); hotkeys?.unregister(2); commentBusy = false
         act("stop_annotating")
     }
     func startDictation() { voice.start() }
-    func finishDictation() async throws { try await voice.finish() }
+    func stopDictation() { voice.stop() }
+    /// Puts a transcript at the caret of the comment field, replacing any selection.
+    func insertTranscript(_ text: String) {
+        if panels?.insertIntoComment(text) != true { comment += Dictation.spaced(text, after: comment.last) }
+    }
+    /// Submit and moves never wait for a transcript: the core takes the typed text and the live
+    /// session, closes the panel, and finishes the session in the background.
     func submit(moving: Bool = false) async {
         guard !commentBusy else { return }; commentBusy = true; defer { commentBusy = false }
-        do {
-            try await finishDictation()
-            if moving { _ = try await call("comment_finish_done", ["submit": .bool(!comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), "text": .string(comment), "keep": .bool(false)]) }
-            else { _ = try await call("submit_comment", ["text": .string(comment)]) }
-        } catch is CancellationError {
-            releaseOverlay(); return
-        } catch {
-            commentError = error.localizedDescription
-            if moving { act("comment_finish_done", ["submit": .bool(false), "text": .string(comment), "keep": .bool(true)]) }
-        }
+        let session = await voice.detach().map(JSON.string) ?? .null
+        do { _ = try await call(moving ? "comment_finish_done" : "submit_comment", ["text": .string(comment), "session": session]) }
+        catch { commentError = error.localizedDescription }
     }
 }
